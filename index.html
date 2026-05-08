@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Parity Scoreboard</title>
+<title>Parity Ledger</title>
 <style>
   :root {
-    --bg: #0f172a;
-    --card: #1e293b;
-    --line: #334155;
-    --text: #e2e8f0;
-    --dim: #94a3b8;
-    --accent: #38bdf8;
-    --win: #22c55e;
-    --loss: #ef4444;
-    --tie: #eab308;
+    --bg: #faf6ec;
+    --card: #fffdf6;
+    --line: #c8d3df;
+    --text: #14213d;
+    --dim: #5d6d83;
+    --accent: #1e3a5f;
+    --win: #2d6e35;
+    --loss: #8b3232;
+    --tie: #8a6b1a;
   }
   * { box-sizing: border-box; }
   body {
@@ -33,7 +33,14 @@
     flex-wrap: wrap;
     margin-bottom: 16px;
   }
-  h1 { font-size: 20px; margin: 0; }
+  h1 {
+    font-size: 22px;
+    margin: 0;
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+  }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   select, button {
     background: var(--card);
@@ -49,12 +56,13 @@
   .day-header {
     margin: 20px 0 8px;
     padding-bottom: 4px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--accent);
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 700;
     font-size: 14px;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
     text-transform: uppercase;
+    font-family: Georgia, "Times New Roman", serif;
   }
   .game {
     position: relative;
@@ -78,7 +86,7 @@
     font-size: 16px;
     padding: 2px 10px;
     border-radius: 4px;
-    background: #0f172a;
+    background: var(--bg);
     border: 1px solid var(--line);
     white-space: nowrap;
   }
@@ -93,10 +101,10 @@
     flex-shrink: 0;
     border: 1px solid rgba(255,255,255,0.15);
   }
-  .tier-dot.red { background: #ef4444; }
-  .tier-dot.white { background: #f8fafc; }
-  .tier-dot.blue { background: #3b82f6; }
-  .tier-dot.green { background: #22c55e; }
+  .tier-dot.red { background: #ef4444; border-color: rgba(0,0,0,0.2); }
+  .tier-dot.white { background: #ffffff; border-color: #6d5e4a; }
+  .tier-dot.blue { background: #3b82f6; border-color: rgba(0,0,0,0.2); }
+  .tier-dot.green { background: #22c55e; border-color: rgba(0,0,0,0.2); }
   .info-btn {
     cursor: pointer;
     border: none;
@@ -133,7 +141,7 @@
   }
   .view-toggle button.active {
     background: var(--accent);
-    color: #0f172a;
+    color: #fffdf6;
     font-weight: 600;
   }
   table.standings {
@@ -160,7 +168,7 @@
   .diff-pos { color: var(--win); }
   .diff-neg { color: var(--loss); }
   .magic-banner {
-    background: rgba(56,189,248,0.08);
+    background: #e8eef5;
     border: 1px solid var(--accent);
     border-radius: 6px;
     padding: 10px 12px;
@@ -169,9 +177,9 @@
     color: var(--text);
     line-height: 1.5;
   }
-  .magic-banner strong { color: var(--accent); }
+  .magic-banner strong { color: var(--accent); font-family: Georgia, serif; }
   tr.tier-divider td {
-    background: #0b1220 !important;
+    background: #dde6f1 !important;
     color: var(--accent);
     font-size: 10px;
     font-weight: 700;
@@ -193,11 +201,26 @@
     text-align: center;
   }
   footer a { color: var(--accent); }
-  footer .motto { font-weight: 700; margin-top: 6px; }
+  footer .motto {
+    font-weight: 700;
+    margin-top: 6px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    letter-spacing: 0.5px;
+  }
+  .wax-seal {
+    display: block;
+    margin: 14px auto 0;
+    width: 56px;
+    height: auto;
+    opacity: 0.9;
+    transition: transform 0.4s ease, opacity 0.2s;
+  }
+  .wax-seal:hover { transform: rotate(-6deg) scale(1.05); opacity: 1; }
   /* Tooltip */
   .tip {
     position: fixed;
-    background: #0f172a;
+    background: var(--card);
     border: 1px solid var(--accent);
     color: var(--text);
     padding: 8px 10px;
@@ -205,7 +228,7 @@
     font-size: 12px;
     max-width: 240px;
     z-index: 100;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 12px rgba(74,30,46,0.18);
   }
   @media (max-width: 600px) {
     .game { grid-template-columns: 56px 1fr auto 1fr; gap: 6px; padding: 8px; }
@@ -217,7 +240,7 @@
 </head>
 <body>
 <header>
-  <h1>Parity Scoreboard</h1>
+  <h1>Parity Ledger</h1>
   <div class="controls">
     <select id="year"></select>
     <select id="pool">
@@ -243,6 +266,7 @@
 <footer>
   <div>This is a hobby project. Check the <a href="https://www.elite9hockey.com/" target="_blank" rel="noopener">e9 schedule</a> for anything of consequence.</div>
   <div class="motto">Work Hard. Have Fun. Be Kind.</div>
+  <img class="wax-seal" src="seal.png" alt="" aria-hidden="true">
 </footer>
 
 <script>
