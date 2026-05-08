@@ -163,6 +163,11 @@
     letter-spacing: 0.5px;
     background: var(--card);
   }
+  table.standings th.sortable { cursor: pointer; user-select: none; }
+  table.standings th.sortable:hover { color: var(--accent); }
+  table.standings th .sort-arrow { opacity: 0.4; margin-left: 3px; font-size: 9px; }
+  table.standings th.sort-active { color: var(--accent); }
+  table.standings th.sort-active .sort-arrow { opacity: 1; }
   table.standings td.num, table.standings th.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.standings tr:hover td { background: rgba(56,189,248,0.05); }
   .diff-pos { color: var(--win); }
@@ -191,6 +196,8 @@
   }
   .move-up { color: var(--win); font-weight: 700; }
   .move-down { color: var(--loss); font-weight: 700; }
+  .reason { display: block; color: var(--dim); font-size: 11px; margin-top: 3px; line-height: 1.4; }
+  .reason-more { font-style: italic; opacity: 0.8; }
   footer {
     margin: 32px 0 8px;
     padding-top: 16px;
@@ -278,6 +285,7 @@ const STORAGE_TEAM = "scoreboard:team";
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
+let summarySort = { key: "ranked", dir: "desc" };
 // Tier visibility is gated behind a URL param so the public link doesn't reveal it.
 const showTiers = new URLSearchParams(location.search).has("tiers");
 
@@ -472,6 +480,46 @@ function render() {
 
 const TIER_ORDER = ["White", "Blue", "Red", "Green"];
 
+// For a given team, examine their cross-tier results.
+// Promotion signal = wins against any higher-tier opponent.
+// Demotion signal = losses against any lower-tier opponent.
+// Movement is capped to ±1 tier (White > Blue > Red > Green).
+function analyzeTeamMovement(team) {
+  const myTier = teamTiers.get(team.teamId) || "";
+  const myRank = TIER_ORDER.indexOf(myTier);
+  if (myRank === -1) return { currentTier: "", predicted: "", reasonGames: [], score: 0 };
+
+  const wins_vs_higher = [];
+  const losses_vs_lower = [];
+
+  for (const g of allGames) {
+    if (g.CurrTeamID !== team.teamId) continue;
+    if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
+    const oppTier = teamTiers.get(g.OpponentTeamID);
+    if (!oppTier) continue;
+    const oppRank = TIER_ORDER.indexOf(oppTier);
+    if (oppRank < myRank && g.WinLoss === "W") {
+      wins_vs_higher.push({ g, oppTier, oppRank });
+    } else if (oppRank > myRank && g.WinLoss === "L") {
+      losses_vs_lower.push({ g, oppTier, oppRank });
+    }
+  }
+
+  const score = wins_vs_higher.length - losses_vs_lower.length;
+  let predicted = myTier;
+  let reasonGames = [];
+  if (score >= 1 && myRank > 0) {
+    predicted = TIER_ORDER[myRank - 1];
+    // Most decisive promotion = win against highest tier (smallest oppRank)
+    reasonGames = wins_vs_higher.slice().sort((a, b) => a.oppRank - b.oppRank);
+  } else if (score <= -1 && myRank < TIER_ORDER.length - 1) {
+    predicted = TIER_ORDER[myRank + 1];
+    // Most decisive demotion = loss to lowest tier (largest oppRank)
+    reasonGames = losses_vs_lower.slice().sort((a, b) => b.oppRank - a.oppRank);
+  }
+  return { currentTier: myTier, currentRank: myRank, predicted, predictedRank: TIER_ORDER.indexOf(predicted), reasonGames, score };
+}
+
 function renderMagic() {
   const year = document.getElementById("year").value;
   const out = document.getElementById("games");
@@ -479,83 +527,87 @@ function renderMagic() {
     out.innerHTML = '<div class="empty">Select a birth year.</div>';
     return;
   }
-  // All games for this year, regardless of tier filter; only teams with a parity tier.
-  const games = allGames.filter(g => gameGroup(g) === year && tierOf(g.DivisionName));
-  const standings = computeStandings(games);
+  const yearGames = allGames.filter(g => gameGroup(g) === year && tierOf(g.DivisionName));
+  const standings = computeStandings(yearGames);
   if (!standings.length) {
     out.innerHTML = '<div class="empty">No teams for this year.</div>';
     return;
   }
-  // Count current teams in each tier (in canonical order); these become the
-  // "slots" we fit the ranked list into to produce a predicted tier.
-  const tierCounts = { White: 0, Blue: 0, Red: 0, Green: 0 };
-  for (const s of standings) {
-    const t = teamTiers.get(s.teamId);
-    if (t in tierCounts) tierCounts[t]++;
-  }
-  function predictedTier(rankIndex) {
-    let cum = 0;
-    for (const t of TIER_ORDER) {
-      cum += tierCounts[t];
-      if (rankIndex < cum) return t;
-    }
-    return "";
-  }
+
+  const analyzed = standings.map(s => ({ ...s, ...analyzeTeamMovement(s) }));
+  // Sort: predicted tier (White first) → score (movement strength) → points → diff
+  analyzed.sort((a, b) =>
+    a.predictedRank - b.predictedRank
+    || b.score - a.score
+    || b.points - a.points
+    || b.diff - a.diff);
 
   const banner =
     '<div class="magic-banner">' +
       '<strong>🔮 Magic Ball — beta!</strong> ' +
-      'Sorted by points (W=2, T=1) then goal diff. ' +
-      'Predicted tier comes from rank-fitting into existing tier sizes — most teams stay put; the ones near the dashed lines are the candidates to move. ' +
-      'Teams that played more cross-tier games will be the validators. Take with a grain of salt.' +
+      'Predictions look at cross-tier games only: each win vs a higher tier nudges a team up, each loss vs a lower tier nudges them down. ' +
+      'Movement is capped at one tier (White ▸ Blue ▸ Red ▸ Green). ' +
+      'Teams with no cross-tier surprises stay put. Reason shows the most decisive game.' +
     '</div>';
+
+  const dot = (tier) => tier
+    ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin-right:6px;vertical-align:middle"></span>'
+    : '';
 
   let lastPredicted = null;
   const rows = [];
-  standings.forEach((s, i) => {
-    const cur = teamTiers.get(s.teamId) || "";
-    const pred = predictedTier(i);
-    if (pred !== lastPredicted) {
+  for (const t of analyzed) {
+    if (t.predicted !== lastPredicted) {
       rows.push(
-        '<tr class="tier-divider"><td colspan="6">' +
-          'Predicted ' + pred + ' starts here' +
+        '<tr class="tier-divider"><td colspan="5">' +
+          'Predicted ' + escapeHtml(t.predicted) + ' starts here' +
         '</td></tr>'
       );
-      lastPredicted = pred;
+      lastPredicted = t.predicted;
     }
-    let moveCell = "—";
-    if (cur && pred && cur !== pred) {
-      const up = TIER_ORDER.indexOf(pred) < TIER_ORDER.indexOf(cur);
-      moveCell = '<span class="' + (up ? "move-up" : "move-down") + '">' +
-        (up ? "↑" : "↓") + ' ' + cur + ' → ' + pred + '</span>';
+
+    let predictionCell = '<span style="color:var(--dim)">—</span>';
+    if (t.predicted && t.predicted !== t.currentTier) {
+      const up = t.predictedRank < t.currentRank;
+      const arrow = up ? "↑" : "↓";
+      const cls = up ? "move-up" : "move-down";
+      const pick = t.reasonGames[0];
+      let reason = "";
+      if (pick) {
+        const oppName = escapeHtml(stripHtml(pick.g.OpponentName3).replace(/^(vs|at)\s+/, ""));
+        const verb = pick.g.WinLoss === "W" ? "Beat" : "Lost to";
+        reason = '<span class="reason">' +
+          verb + " " + escapeHtml(pick.oppTier) + " team " + oppName + " " + escapeHtml(pick.g.GameScore || "") +
+          (t.reasonGames.length > 1 ? ' <span class="reason-more">+' + (t.reasonGames.length - 1) + ' more</span>' : "") +
+        '</span>';
+      }
+      predictionCell =
+        '<span class="' + cls + '">' + arrow + " " + dot(t.predicted) + escapeHtml(t.predicted) + '</span>' + reason;
     }
-    const diffStr = (s.diff > 0 ? "+" : "") + s.diff;
-    const diffCls = s.diff > 0 ? "diff-pos" : (s.diff < 0 ? "diff-neg" : "");
-    const curDot = cur
-      ? '<span class="tier-dot ' + cur.toLowerCase() + '" style="margin-right:6px;vertical-align:middle"></span>'
-      : '';
+
+    const diffStr = (t.diff > 0 ? "+" : "") + t.diff;
+    const diffCls = t.diff > 0 ? "diff-pos" : (t.diff < 0 ? "diff-neg" : "");
+
     rows.push(
       '<tr>' +
-        '<td class="num">' + (i + 1) + '</td>' +
-        '<td>' + curDot + escapeHtml(s.name) + '</td>' +
-        '<td class="num">' + s.completed + '/' + s.scheduled + '</td>' +
-        '<td class="num">' + s.w + '-' + s.l + '-' + s.t + '</td>' +
+        '<td>' + dot(t.currentTier) + escapeHtml(t.name) + '</td>' +
+        '<td class="num">' + t.completed + '/' + t.scheduled + '</td>' +
+        '<td class="num">' + t.w + '-' + t.l + '-' + t.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
-        '<td>' + moveCell + '</td>' +
+        '<td>' + predictionCell + '</td>' +
       '</tr>'
     );
-  });
+  }
 
   out.innerHTML =
     banner +
     '<table class="standings">' +
       '<thead><tr>' +
-        '<th class="num">#</th>' +
         '<th>Team</th>' +
         '<th class="num">GP</th>' +
         '<th class="num">W-L-T</th>' +
         '<th class="num">Diff</th>' +
-        '<th>Movement</th>' +
+        '<th>Prediction</th>' +
       '</tr></thead>' +
       '<tbody>' + rows.join("") + '</tbody>' +
     '</table>';
@@ -624,6 +676,39 @@ function computeStandings(games) {
     || a.name.localeCompare(b.name));
 }
 
+function sortStandings(rows) {
+  const dir = summarySort.dir === "asc" ? 1 : -1;
+  const k = summarySort.key;
+  if (k === "name") {
+    return rows.slice().sort((a, b) => dir * a.name.localeCompare(b.name));
+  }
+  if (k === "gp") {
+    return rows.slice().sort((a, b) =>
+      dir * (a.completed - b.completed) || a.name.localeCompare(b.name));
+  }
+  if (k === "wlt") {
+    return rows.slice().sort((a, b) =>
+      dir * (a.points - b.points)
+      || dir * (a.diff - b.diff)
+      || a.name.localeCompare(b.name));
+  }
+  if (k === "diff") {
+    return rows.slice().sort((a, b) =>
+      dir * (a.diff - b.diff) || a.name.localeCompare(b.name));
+  }
+  return rows; // "ranked" — already sorted by computeStandings
+}
+
+function setSummarySort(key) {
+  if (summarySort.key === key) {
+    summarySort.dir = summarySort.dir === "desc" ? "asc" : "desc";
+  } else {
+    summarySort.key = key;
+    summarySort.dir = key === "name" ? "asc" : "desc";
+  }
+  renderSummary();
+}
+
 function renderSummary() {
   const { year, games } = filteredGames();
   const out = document.getElementById("games");
@@ -631,11 +716,12 @@ function renderSummary() {
     out.innerHTML = '<div class="empty">Select a birth year to see standings.</div>';
     return;
   }
-  const rows = computeStandings(games);
+  let rows = computeStandings(games);
   if (!rows.length) {
     out.innerHTML = '<div class="empty">No teams for this filter.</div>';
     return;
   }
+  rows = sortStandings(rows);
   const trs = rows.map(r => {
     const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
     const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
@@ -652,16 +738,22 @@ function renderSummary() {
       '</tr>'
     );
   }).join("");
+  const arrow = (key) => summarySort.key === key
+    ? '<span class="sort-arrow">' + (summarySort.dir === "desc" ? "▼" : "▲") + '</span>'
+    : '<span class="sort-arrow">↕</span>';
+  const cls = (key) => 'sortable' + (summarySort.key === key ? ' sort-active' : '');
   out.innerHTML =
     '<table class="standings">' +
       '<thead><tr>' +
-        '<th>Team</th>' +
-        '<th class="num">GP</th>' +
-        '<th class="num">W-L-T</th>' +
-        '<th class="num">Diff</th>' +
+        '<th class="' + cls("name") + '" data-sort="name">Team' + arrow("name") + '</th>' +
+        '<th class="num ' + cls("gp") + '" data-sort="gp">GP' + arrow("gp") + '</th>' +
+        '<th class="num ' + cls("wlt") + '" data-sort="wlt">W-L-T' + arrow("wlt") + '</th>' +
+        '<th class="num ' + cls("diff") + '" data-sort="diff">Diff' + arrow("diff") + '</th>' +
       '</tr></thead>' +
       '<tbody>' + trs + '</tbody>' +
     '</table>';
+  out.querySelectorAll("th[data-sort]").forEach(th =>
+    th.addEventListener("click", () => setSummarySort(th.dataset.sort)));
 }
 
 function gameCard(g, year) {
