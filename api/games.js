@@ -1,10 +1,12 @@
 // Vercel serverless function: proxies the vahockey schedules API.
 // - Caches upstream response for 10 minutes (in-memory + edge cache).
 // - Only fetches upstream on demand (no background polling).
-// - All users of the deployed site share the same cached payload.
+// - Makes two parallel calls (FutureGames=n past+today, FutureGames=y future+today)
+//   and merges, because the upstream's empty-string handling is environment-dependent.
 
 const TTL_MS = 10 * 60 * 1000;
-const PAYLOAD = {
+
+const BASE_PAYLOAD = {
   CustomerID: "1",
   Season: "2027",
   League: "bhlparity",
@@ -16,7 +18,6 @@ const PAYLOAD = {
   Columns: ["GameDateF","StartTime","LocationName","LiveBarn","OpponentName3","WinLoss","GameScore"],
   GroupBy: ["ProgramName","CurrTeamName"],
   ShowDropDowns: "y",
-  FutureGames: "y",
   NumOfDays: "",
   IncludeOtherLeagues: "y",
   LiveBarnURL: "http://www.elite9hockey.com/livebarn/",
@@ -45,7 +46,7 @@ let cache = null;
 let cachedAt = 0;
 let inflight = null;
 
-async function fetchUpstream() {
+async function fetchOne(futureFlag) {
   const r = await fetch("https://widgets.vahockey.com/schedules/get", {
     method: "POST",
     headers: {
@@ -56,12 +57,53 @@ async function fetchUpstream() {
       "x-requested-with": "XMLHttpRequest",
       "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     },
-    body: JSON.stringify(PAYLOAD),
+    body: JSON.stringify({ ...BASE_PAYLOAD, FutureGames: futureFlag }),
   });
   if (!r.ok) throw new Error("upstream HTTP " + r.status);
   const data = await r.json();
   if (data.result !== "success") throw new Error("upstream returned: " + data.result);
   return data;
+}
+
+// Build a stable key per game record so we can dedupe across the two calls
+// (a game played today shows up in both past and future responses).
+function gameKey(g) {
+  return [g.GameDate, g.StartTime, g.CurrTeamID, g.OpponentTeamID].join("|");
+}
+
+function mergeGames(past, future) {
+  // Both responses have the same shape: Games[Program][Team] = [game,...]
+  // Merge into a single tree, deduping by gameKey.
+  const merged = {};
+  const seen = new Set();
+  for (const src of [past, future]) {
+    const programs = (src && src.Games) || {};
+    for (const [progName, teams] of Object.entries(programs)) {
+      for (const [teamName, list] of Object.entries(teams)) {
+        for (const game of list) {
+          const k = gameKey(game) + "|" + progName + "|" + teamName;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          if (!merged[progName]) merged[progName] = {};
+          if (!merged[progName][teamName]) merged[progName][teamName] = [];
+          merged[progName][teamName].push(game);
+        }
+      }
+    }
+  }
+  return merged;
+}
+
+async function fetchUpstream() {
+  const [past, future] = await Promise.all([
+    fetchOne("n").catch(() => null),
+    fetchOne("y").catch(() => null),
+  ]);
+  if (!past && !future) throw new Error("both upstream calls failed");
+  const Games = mergeGames(past, future);
+  // Use whichever response has the most fields as the base for top-level keys.
+  const base = future || past;
+  return { ...base, Games, result: "success" };
 }
 
 export default async function handler(req, res) {
@@ -70,7 +112,6 @@ export default async function handler(req, res) {
 
   if (!fresh) {
     try {
-      // Coalesce concurrent refreshes into a single upstream call.
       if (!inflight) inflight = fetchUpstream().finally(() => { inflight = null; });
       const data = await inflight;
       cache = data;
@@ -80,11 +121,9 @@ export default async function handler(req, res) {
         res.status(502).json({ error: e.message });
         return;
       }
-      // Serve stale cache on upstream failure.
     }
   }
 
-  // Edge cache: 10 min fresh, then serve stale up to 1 min while revalidating.
   res.setHeader("cache-control", "public, s-maxage=600, stale-while-revalidate=60");
   res.status(200).json({ ...cache, lastUpdated: cachedAt });
 }
