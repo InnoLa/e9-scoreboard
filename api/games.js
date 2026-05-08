@@ -46,18 +46,22 @@ let cache = null;
 let cachedAt = 0;
 let inflight = null;
 
-async function fetchOne(futureFlag) {
+async function fetchOne(overrides = {}) {
   const r = await fetch("https://widgets.vahockey.com/schedules/get", {
     method: "POST",
     headers: {
       "accept": "application/json, text/plain, */*",
+      "accept-language": "en-US,en;q=0.9",
       "content-type": "application/json",
       "origin": "https://widgets.vahockey.com",
       "referer": "https://widgets.vahockey.com/schedules",
       "x-requested-with": "XMLHttpRequest",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
       "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     },
-    body: JSON.stringify({ ...BASE_PAYLOAD, FutureGames: futureFlag }),
+    body: JSON.stringify({ ...BASE_PAYLOAD, ...overrides }),
   });
   if (!r.ok) throw new Error("upstream HTTP " + r.status);
   const data = await r.json();
@@ -103,15 +107,27 @@ function countGames(resp) {
 }
 
 async function fetchUpstream() {
+  // Strategy: send a wide explicit date range to sidestep the upstream's
+  // FutureGames-flag normalization (which behaves differently from cloud IPs).
+  // Range covers ~6 months back and ~6 months forward.
+  const today = new Date();
+  const startDate = new Date(today); startDate.setMonth(startDate.getMonth() - 6);
+  const endDate = new Date(today);   endDate.setMonth(endDate.getMonth() + 6);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+
+  const overridesA = { FutureGames: "n" };
+  const overridesB = { FutureGames: "y" };
+  const overridesC = { StartDate: fmt(startDate), EndDate: fmt(endDate), FutureGames: "" };
+
   const results = await Promise.allSettled([
-    fetchOne("n"),
-    fetchOne("y"),
-    fetchOne(""),
+    fetchOne(overridesA),
+    fetchOne(overridesB),
+    fetchOne(overridesC),
   ]);
-  const [pastR, futureR, blankR] = results;
+  const [pastR, futureR, rangeR] = results;
   const past = pastR.status === "fulfilled" ? pastR.value : null;
   const future = futureR.status === "fulfilled" ? futureR.value : null;
-  const blank = blankR.status === "fulfilled" ? blankR.value : null;
+  const range = rangeR.status === "fulfilled" ? rangeR.value : null;
 
   const debug = {
     pastStatus: pastR.status,
@@ -122,15 +138,17 @@ async function fetchUpstream() {
     futureError: futureR.status === "rejected" ? String(futureR.reason) : null,
     futureGames: countGames(future),
     futureFutureGamesEcho: future && future.input && future.input.FutureGames,
-    blankStatus: blankR.status,
-    blankError: blankR.status === "rejected" ? String(blankR.reason) : null,
-    blankGames: countGames(blank),
-    blankFutureGamesEcho: blank && blank.input && blank.input.FutureGames,
+    rangeStatus: rangeR.status,
+    rangeError: rangeR.status === "rejected" ? String(rangeR.reason) : null,
+    rangeGames: countGames(range),
+    rangeFutureGamesEcho: range && range.input && range.input.FutureGames,
+    rangeStartDateEcho: range && range.input && range.input.StartDate,
+    rangeEndDateEcho: range && range.input && range.input.EndDate,
   };
 
-  if (!past && !future && !blank) throw new Error("all upstream calls failed");
-  const Games = mergeGames(past, future, blank);
-  const base = blank || future || past;
+  if (!past && !future && !range) throw new Error("all upstream calls failed");
+  const Games = mergeGames(past, future, range);
+  const base = range || future || past;
   return { ...base, Games, result: "success", _debug: debug };
 }
 
