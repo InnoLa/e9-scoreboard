@@ -229,6 +229,8 @@ const STORAGE_TEAM = "scoreboard:team";
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
+// Tier visibility is gated behind a URL param so the public link doesn't reveal it.
+const showTiers = new URLSearchParams(location.search).has("tiers");
 
 // Mock data for preview/local testing (when /api/games is unreachable).
 const MOCK = {
@@ -298,6 +300,11 @@ async function load() {
   document.getElementById("updated").textContent =
     (isMock ? "PREVIEW (mock data) — " : "") + "Data last fetched: " + stamp;
   populateYearOptions();
+  // Hide tier UI on the public URL.
+  if (!showTiers) {
+    document.getElementById("pool").style.display = "none";
+    document.getElementById("pool").value = "all";
+  }
   render();
 }
 
@@ -491,9 +498,13 @@ function renderSummary() {
   const trs = rows.map(r => {
     const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
     const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
+    const tier = teamTiers.get(r.teamId) || "";
+    const tierDot = (showTiers && tier)
+      ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin-right:6px;vertical-align:middle" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
+      : '';
     return (
       '<tr>' +
-        '<td>' + escapeHtml(r.name) + '</td>' +
+        '<td>' + tierDot + escapeHtml(r.name) + '</td>' +
         '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
         '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
@@ -537,7 +548,7 @@ function gameCard(g, year) {
   const oppTier = teamTiers.get(g.OpponentTeamID) || "";
   const homeTier = curIsHome ? curTier : oppTier;
   const awayTier = curIsHome ? oppTier : curTier;
-  const dot = (tier) => tier
+  const dot = (tier) => (showTiers && tier)
     ? '<span class="tier-dot ' + tier.toLowerCase() + '" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
     : '';
 
