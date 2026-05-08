@@ -159,6 +159,30 @@
   table.standings tr:hover td { background: rgba(56,189,248,0.05); }
   .diff-pos { color: var(--win); }
   .diff-neg { color: var(--loss); }
+  .magic-banner {
+    background: rgba(56,189,248,0.08);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 8px 0 12px;
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .magic-banner strong { color: var(--accent); }
+  tr.tier-divider td {
+    background: #0b1220 !important;
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 6px 6px;
+    border-top: 2px dashed var(--accent);
+    border-bottom: 1px solid var(--line);
+  }
+  .move-up { color: var(--win); font-weight: 700; }
+  .move-down { color: var(--loss); font-weight: 700; }
   footer {
     margin: 32px 0 8px;
     padding-top: 16px;
@@ -212,6 +236,7 @@
 <div class="view-toggle" role="tablist">
   <button id="view-results" class="active" role="tab">Results</button>
   <button id="view-summary" role="tab">Summary</button>
+  <button id="view-magic" role="tab" style="display:none">🔮 Predict</button>
 </div>
 <div class="updated" id="updated"></div>
 <div id="games"><div class="empty">Loading…</div></div>
@@ -417,7 +442,99 @@ function filteredGames({ applyTeam = false, crossTier = false } = {}) {
 
 function render() {
   if (currentView === "summary") return renderSummary();
+  if (currentView === "magic") return renderMagic();
   return renderResults();
+}
+
+const TIER_ORDER = ["White", "Blue", "Red", "Green"];
+
+function renderMagic() {
+  const year = document.getElementById("year").value;
+  const out = document.getElementById("games");
+  if (!year) {
+    out.innerHTML = '<div class="empty">Select a birth year.</div>';
+    return;
+  }
+  // All games for this year, regardless of tier filter; only teams with a parity tier.
+  const games = allGames.filter(g => gameGroup(g) === year && tierOf(g.DivisionName));
+  const standings = computeStandings(games);
+  if (!standings.length) {
+    out.innerHTML = '<div class="empty">No teams for this year.</div>';
+    return;
+  }
+  // Count current teams in each tier (in canonical order); these become the
+  // "slots" we fit the ranked list into to produce a predicted tier.
+  const tierCounts = { White: 0, Blue: 0, Red: 0, Green: 0 };
+  for (const s of standings) {
+    const t = teamTiers.get(s.teamId);
+    if (t in tierCounts) tierCounts[t]++;
+  }
+  function predictedTier(rankIndex) {
+    let cum = 0;
+    for (const t of TIER_ORDER) {
+      cum += tierCounts[t];
+      if (rankIndex < cum) return t;
+    }
+    return "";
+  }
+
+  const banner =
+    '<div class="magic-banner">' +
+      '<strong>🔮 Magic Ball — beta!</strong> ' +
+      'Sorted by points (W=2, T=1) then goal diff. ' +
+      'Predicted tier comes from rank-fitting into existing tier sizes — most teams stay put; the ones near the dashed lines are the candidates to move. ' +
+      'Teams that played more cross-tier games will be the validators. Take with a grain of salt.' +
+    '</div>';
+
+  let lastPredicted = null;
+  const rows = [];
+  standings.forEach((s, i) => {
+    const cur = teamTiers.get(s.teamId) || "";
+    const pred = predictedTier(i);
+    if (pred !== lastPredicted) {
+      rows.push(
+        '<tr class="tier-divider"><td colspan="6">' +
+          'Predicted ' + pred + ' starts here' +
+        '</td></tr>'
+      );
+      lastPredicted = pred;
+    }
+    let moveCell = "—";
+    if (cur && pred && cur !== pred) {
+      const up = TIER_ORDER.indexOf(pred) < TIER_ORDER.indexOf(cur);
+      moveCell = '<span class="' + (up ? "move-up" : "move-down") + '">' +
+        (up ? "↑" : "↓") + ' ' + cur + ' → ' + pred + '</span>';
+    }
+    const diffStr = (s.diff > 0 ? "+" : "") + s.diff;
+    const diffCls = s.diff > 0 ? "diff-pos" : (s.diff < 0 ? "diff-neg" : "");
+    const curDot = cur
+      ? '<span class="tier-dot ' + cur.toLowerCase() + '" style="margin-right:6px;vertical-align:middle"></span>'
+      : '';
+    rows.push(
+      '<tr>' +
+        '<td class="num">' + (i + 1) + '</td>' +
+        '<td>' + curDot + escapeHtml(s.name) + '</td>' +
+        '<td class="num">' + s.completed + '/' + s.scheduled + '</td>' +
+        '<td class="num">' + s.w + '-' + s.l + '-' + s.t + '</td>' +
+        '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
+        '<td>' + moveCell + '</td>' +
+      '</tr>'
+    );
+  });
+
+  out.innerHTML =
+    banner +
+    '<table class="standings">' +
+      '<thead><tr>' +
+        '<th class="num">#</th>' +
+        '<th>Team</th>' +
+        '<th class="num">GP</th>' +
+        '<th class="num">W-L-T</th>' +
+        '<th class="num">Diff</th>' +
+        '<th>Movement</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows.join("") + '</tbody>' +
+    '</table>';
 }
 
 function renderResults() {
@@ -622,13 +739,22 @@ function setView(v) {
   localStorage.setItem(STORAGE_VIEW, v);
   document.getElementById("view-results").classList.toggle("active", v === "results");
   document.getElementById("view-summary").classList.toggle("active", v === "summary");
+  document.getElementById("view-magic").classList.toggle("active", v === "magic");
   // Team filter only applies to Results view.
   document.getElementById("team").style.display = v === "results" ? "" : "none";
+  // Tier filter is hidden in Magic Ball view (it considers all tiers).
+  if (showTiers) {
+    document.getElementById("pool").style.display = v === "magic" ? "none" : "";
+  }
   render();
 }
 document.getElementById("view-results").addEventListener("click", () => setView("results"));
 document.getElementById("view-summary").addEventListener("click", () => setView("summary"));
-// Apply persisted view on load.
+document.getElementById("view-magic").addEventListener("click", () => setView("magic"));
+// Magic Ball view is private — only visible on the tiers-on URL.
+if (showTiers) document.getElementById("view-magic").style.display = "";
+// Persisted view may be invalid for current URL (e.g. magic on public link).
+if (currentView === "magic" && !showTiers) currentView = "results";
 setView(currentView);
 
 document.getElementById("year").addEventListener("change", (e) => {
