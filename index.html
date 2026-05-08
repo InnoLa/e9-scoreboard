@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>2016 Parity — Live Scoreboard</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --line: #334155;
+    --text: #e2e8f0;
+    --dim: #94a3b8;
+    --accent: #38bdf8;
+    --win: #22c55e;
+    --loss: #ef4444;
+    --tie: #eab308;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 16px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 20px; margin: 0; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  select, button {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  .updated { color: var(--dim); font-size: 12px; }
+  .day-header {
+    margin: 20px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .game {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 70px 1fr auto 1fr 28px;
+    align-items: center;
+    gap: 10px;
+  }
+  .time { color: var(--dim); font-size: 13px; }
+  .team { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .team.away { justify-content: flex-end; text-align: right; }
+  .team img { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
+  .team .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .score {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 2px 10px;
+    border-radius: 4px;
+    background: #0f172a;
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .score.upcoming { color: var(--dim); font-weight: 500; font-size: 13px; }
+  .winner { color: var(--win); }
+  .loser { color: var(--dim); }
+  .pool {
+    display: inline-block;
+    font-size: 10px;
+    color: var(--dim);
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 99px;
+  }
+  .meta { color: var(--dim); font-size: 12px; margin-top: 4px; grid-column: 1 / -1; }
+  .livebarn {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 18px;
+    text-align: center;
+  }
+  .livebarn:hover { color: white; }
+  .empty, .error {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--dim);
+  }
+  .error { color: var(--loss); }
+  @media (max-width: 600px) {
+    .game { grid-template-columns: 56px 1fr auto 1fr 24px; gap: 6px; padding: 8px; }
+    .team img { width: 20px; height: 20px; }
+    .score { font-size: 14px; padding: 2px 6px; }
+    h1 { font-size: 17px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>2016 Parity Scoreboard</h1>
+  <div class="controls">
+    <select id="pool">
+      <option value="all">All 2016</option>
+      <option value="2016">Elite</option>
+      <option value="2016 - Red">Red</option>
+      <option value="2016 - White">White</option>
+      <option value="2016 - Blue">Blue</option>
+    </select>
+    <button id="refresh">Refresh</button>
+  </div>
+</header>
+<div class="updated" id="updated"></div>
+<div id="games"><div class="empty">Loading…</div></div>
+
+<script>
+const ENDPOINT = "/api/games";
+
+let allGames = [];
+
+async function load() {
+  const out = document.getElementById("games");
+  out.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const r = await fetch(ENDPOINT);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    if (data.result !== "success") throw new Error("API returned: " + data.result);
+    allGames = flatten(data.Games);
+    const stamp = data.lastUpdated
+      ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : new Date().toLocaleTimeString();
+    document.getElementById("updated").textContent = "Data last fetched: " + stamp;
+    render();
+  } catch (e) {
+    out.innerHTML = '<div class="error">Error: ' + e.message + '</div>';
+  }
+}
+
+function flatten(games) {
+  const out = [];
+  for (const prog of Object.values(games || {})) {
+    for (const team of Object.values(prog)) {
+      for (const g of team) out.push(g);
+    }
+  }
+  return out;
+}
+
+function dedupe(games) {
+  // Each matchup appears twice (once per team). Pick the home-team version.
+  const seen = new Map();
+  for (const g of games) {
+    const a = g.CurrTeamID, b = g.OpponentTeamID;
+    const key = g.GameDate + "|" + g.StartTime + "|" + [a,b].sort().join("-");
+    const isHome = (g.OpponentName3 || "").includes("vs ");
+    const existing = seen.get(key);
+    if (!existing || (isHome && !existing._home)) {
+      g._home = isHome;
+      seen.set(key, g);
+    }
+  }
+  return [...seen.values()];
+}
+
+function render() {
+  const pool = document.getElementById("pool").value;
+  let games = allGames.filter(g => g.DivisionGroupName === "2016");
+  if (pool !== "all") games = games.filter(g => g.DivisionName === pool);
+  games = dedupe(games);
+  games.sort((a, b) => {
+    if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
+    return parseTime(a.StartTime) - parseTime(b.StartTime);
+  });
+
+  const out = document.getElementById("games");
+  if (!games.length) {
+    out.innerHTML = '<div class="empty">No games for this filter.</div>';
+    return;
+  }
+
+  const byDay = {};
+  for (const g of games) (byDay[g.GameDate] = byDay[g.GameDate] || []).push(g);
+
+  const html = [];
+  for (const date of Object.keys(byDay).sort()) {
+    html.push('<div class="day-header">' + formatDate(date) + '</div>');
+    for (const g of byDay[date]) html.push(gameCard(g));
+  }
+  out.innerHTML = html.join("");
+}
+
+function gameCard(g) {
+  // Determine home/away based on "vs " (home) vs "at " (away) in OpponentName3
+  const curIsHome = (g.OpponentName3 || "").includes("vs ");
+  const home = curIsHome
+    ? { name: g.CurrTeamName, logo: g.CurrLogo }
+    : { name: stripHtml(g.OpponentName3).replace(/^at\s+/, ""), logo: g.OpponentLogo };
+  const away = curIsHome
+    ? { name: stripHtml(g.OpponentName3).replace(/^vs\s+/, ""), logo: g.OpponentLogo }
+    : { name: g.CurrTeamName, logo: g.CurrLogo };
+
+  let scoreHtml, awayCls = "", homeCls = "";
+  if (g.GameScore && /\d+-\d+/.test(g.GameScore)) {
+    const [s1, s2] = g.GameScore.split("-").map(Number);
+    // GameScore is "currScore-oppScore"
+    const curScore = s1, oppScore = s2;
+    const homeScore = curIsHome ? curScore : oppScore;
+    const awayScore = curIsHome ? oppScore : curScore;
+    if (homeScore > awayScore) { homeCls = "winner"; awayCls = "loser"; }
+    else if (awayScore > homeScore) { awayCls = "winner"; homeCls = "loser"; }
+    scoreHtml = '<div class="score"><span class="' + awayCls + '">' + awayScore + '</span> – <span class="' + homeCls + '">' + homeScore + '</span></div>';
+  } else {
+    scoreHtml = '<div class="score upcoming">vs</div>';
+  }
+
+  const livebarnMatch = (g.LiveBarn || "").match(/href="([^"]+)"/);
+  const livebarn = livebarnMatch
+    ? '<a class="livebarn" href="' + livebarnMatch[1] + '" target="_blank" title="Watch on LiveBarn">▶</a>'
+    : '<span></span>';
+
+  const poolBadge = g.DivisionName && g.DivisionName !== "2016"
+    ? '<span class="pool">' + g.DivisionName.replace("2016 - ", "") + '</span>'
+    : (g.DivisionName === "2016" ? '<span class="pool">Elite</span>' : '');
+
+  return (
+    '<div class="game">' +
+      '<div class="time">' + g.StartTime + '</div>' +
+      '<div class="team away">' +
+        '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
+        (away.logo ? '<img src="' + away.logo + '" alt="">' : '') +
+      '</div>' +
+      scoreHtml +
+      '<div class="team">' +
+        (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
+        '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
+      '</div>' +
+      livebarn +
+      '<div class="meta">' + escapeHtml(g.LocationName || "") + poolBadge + '</div>' +
+    '</div>'
+  );
+}
+
+function parseTime(t) {
+  const m = (t || "").match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if (!m) return 0;
+  let h = +m[1] % 12;
+  if (m[3].toUpperCase() === "PM") h += 12;
+  return h * 60 + +m[2];
+}
+
+function formatDate(iso) {
+  const d = new Date(iso + "T12:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+function stripHtml(s) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = s || "";
+  return tmp.textContent || "";
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+document.getElementById("pool").addEventListener("change", render);
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>
