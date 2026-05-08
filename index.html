@@ -61,7 +61,7 @@
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 22px 12px 10px;
+    padding: 10px 12px;
     margin-bottom: 8px;
     display: grid;
     grid-template-columns: 70px 1fr auto 1fr;
@@ -85,24 +85,18 @@
   .score.upcoming { color: var(--dim); font-weight: 500; font-size: 13px; }
   .winner { color: var(--win); }
   .loser { color: var(--dim); }
-  .tier-badge {
-    position: absolute;
-    top: 6px;
-    right: 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    color: var(--dim);
-    padding: 1px 6px;
-    border: 1px solid var(--line);
-    border-radius: 99px;
-    background: #0f172a;
+  .tier-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
   }
-  .tier-badge.red { color: #fca5a5; border-color: #7f1d1d; }
-  .tier-badge.white { color: #f8fafc; border-color: #cbd5e1; }
-  .tier-badge.blue { color: #93c5fd; border-color: #1e40af; }
-  .tier-badge.green { color: #86efac; border-color: #166534; }
+  .tier-dot.red { background: #ef4444; }
+  .tier-dot.white { background: #f8fafc; }
+  .tier-dot.blue { background: #3b82f6; }
+  .tier-dot.green { background: #22c55e; }
   .info-btn {
     cursor: pointer;
     border: none;
@@ -190,7 +184,7 @@
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
   }
   @media (max-width: 600px) {
-    .game { grid-template-columns: 56px 1fr auto 1fr; gap: 6px; padding: 22px 8px 8px; }
+    .game { grid-template-columns: 56px 1fr auto 1fr; gap: 6px; padding: 8px; }
     .team img { width: 20px; height: 20px; }
     .score { font-size: 14px; padding: 2px 6px; }
     h1 { font-size: 17px; }
@@ -261,6 +255,23 @@ function mockGame(date,time,loc,a,b,group,div,score,wl){
 }
 
 let allGames = [];
+// Map of teamId -> tier label ("Red" | "White" | "Blue" | "Green" | "" if no tier)
+let teamTiers = new Map();
+
+function tierOf(divisionName) {
+  if (!divisionName) return "";
+  const idx = divisionName.indexOf(" - ");
+  return idx === -1 ? "" : divisionName.slice(idx + 3);
+}
+
+function buildTeamTiers() {
+  teamTiers = new Map();
+  for (const g of allGames) {
+    if (g.CurrTeamID && g.DivisionName) {
+      teamTiers.set(g.CurrTeamID, tierOf(g.DivisionName));
+    }
+  }
+}
 
 async function load() {
   const out = document.getElementById("games");
@@ -280,6 +291,7 @@ async function load() {
     isMock = true;
   }
   allGames = flatten(data.Games);
+  buildTeamTiers();
   const stamp = data.lastUpdated
     ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : new Date().toLocaleTimeString();
@@ -371,14 +383,24 @@ function dedupe(games) {
   return [...seen.values()];
 }
 
-function filteredGames(applyTeam) {
+function filteredGames({ applyTeam = false, crossTier = false } = {}) {
   const year = document.getElementById("year").value;
   const pool = document.getElementById("pool").value;
   const team = document.getElementById("team").value;
   if (!year) return { year: "", pool, team, games: [] };
   let games = allGames.filter(g => gameGroup(g) === year);
   if (pool !== "all") {
-    games = games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
+    if (crossTier) {
+      // Include a game if EITHER team is in the selected tier.
+      games = games.filter(g => {
+        const curT = tierOf(g.DivisionName);
+        const oppT = teamTiers.get(g.OpponentTeamID) || "";
+        return curT === pool || oppT === pool;
+      });
+    } else {
+      // Curr-team perspective only (used for standings — counts each tier's teams).
+      games = games.filter(g => tierOf(g.DivisionName) === pool);
+    }
   }
   if (applyTeam && team !== "all") {
     games = games.filter(g => g.CurrTeamName === team);
@@ -392,7 +414,7 @@ function render() {
 }
 
 function renderResults() {
-  const { year, games: filtered } = filteredGames(true);
+  const { year, games: filtered } = filteredGames({ applyTeam: true, crossTier: true });
   if (!year) return;
   const games = dedupe(filtered).sort((a, b) => {
     if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
@@ -510,36 +532,27 @@ function gameCard(g, year) {
     scoreHtml = '<div class="score upcoming">vs</div>';
   }
 
-  // Tier badge: derive tier label + color class from DivisionName
-  let tierBadge = "";
-  const dn = g.DivisionName || "";
-  if (dn) {
-    let label = "", cls = "";
-    const dashIdx = dn.indexOf(" - ");
-    if (dashIdx === -1) { label = "Elite"; cls = "elite"; }
-    else {
-      const t = dn.slice(dashIdx + 3);
-      label = t;
-      cls = t.toLowerCase();
-    }
-    tierBadge =
-      '<span class="tier-badge ' + cls + '">' +
-        escapeHtml(label) +
-        ' <button class="info-btn" data-tip="' + escapeHtml(TIER_INFO) + '" aria-label="About tiers">ⓘ</button>' +
-      '</span>';
-  }
+  // Per-team tier dots: each team has its own tier (parity is cross-tier).
+  const curTier = tierOf(g.DivisionName);
+  const oppTier = teamTiers.get(g.OpponentTeamID) || "";
+  const homeTier = curIsHome ? curTier : oppTier;
+  const awayTier = curIsHome ? oppTier : curTier;
+  const dot = (tier) => tier
+    ? '<span class="tier-dot ' + tier.toLowerCase() + '" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
+    : '';
 
   return (
     '<div class="game">' +
-      tierBadge +
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
         '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
+        dot(awayTier) +
         (away.logo ? '<img src="' + away.logo + '" alt="">' : '') +
       '</div>' +
       scoreHtml +
       '<div class="team">' +
         (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
+        dot(homeTier) +
         '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
       '</div>' +
       '<div class="meta">' + escapeHtml(g.LocationName || "") + '</div>' +
