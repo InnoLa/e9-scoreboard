@@ -535,10 +535,19 @@ function renderMagic() {
   }
 
   const analyzed = standings.map(s => ({ ...s, ...analyzeTeamMovement(s) }));
-  // Sort: predicted tier (White first) → score (movement strength) → points → diff
+  // Sort the list as a fluid continuum:
+  //  Within each predicted tier, teams moving DOWN into it appear at the top
+  //  (they came from a higher tier and are dropping just past the line),
+  //  established teams in the middle (best→worst),
+  //  teams moving UP into it appear at the bottom (rising up from below).
+  // Primary order is predicted tier rank (White first).
+  const movementGroup = (t) =>
+    t.currentRank < t.predictedRank ? 0   // demoting in
+    : t.currentRank === t.predictedRank ? 1 // staying
+    : 2;                                  // promoting in
   analyzed.sort((a, b) =>
     a.predictedRank - b.predictedRank
-    || b.score - a.score
+    || movementGroup(a) - movementGroup(b)
     || b.points - a.points
     || b.diff - a.diff);
 
