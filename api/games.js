@@ -46,27 +46,51 @@ let cache = null;
 let cachedAt = 0;
 let inflight = null;
 
-async function fetchOne(overrides = {}) {
+async function fetchOne(overrides = {}, cookieHeader = "") {
+  const headers = {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "cache-control": "no-cache",
+    "pragma": "no-cache",
+    "content-type": "application/json",
+    "origin": "https://widgets.vahockey.com",
+    "referer": "https://widgets.vahockey.com/schedules",
+    "x-requested-with": "XMLHttpRequest",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+  };
+  if (cookieHeader) headers["cookie"] = cookieHeader;
   const r = await fetch("https://widgets.vahockey.com/schedules/get", {
     method: "POST",
-    headers: {
-      "accept": "application/json, text/plain, */*",
-      "accept-language": "en-US,en;q=0.9",
-      "content-type": "application/json",
-      "origin": "https://widgets.vahockey.com",
-      "referer": "https://widgets.vahockey.com/schedules",
-      "x-requested-with": "XMLHttpRequest",
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-origin",
-      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-    },
+    headers,
     body: JSON.stringify({ ...BASE_PAYLOAD, ...overrides }),
   });
   if (!r.ok) throw new Error("upstream HTTP " + r.status);
   const data = await r.json();
   if (data.result !== "success") throw new Error("upstream returned: " + data.result);
   return data;
+}
+
+// Warm up a session by hitting the widgets host first; capture any Set-Cookie.
+async function warmupCookies() {
+  try {
+    const r = await fetch("https://widgets.vahockey.com/schedules", {
+      headers: {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      },
+    });
+    const setCookies = r.headers.getSetCookie ? r.headers.getSetCookie() : [r.headers.get("set-cookie")].filter(Boolean);
+    return setCookies
+      .map(c => c.split(";")[0])
+      .filter(Boolean)
+      .join("; ");
+  } catch {
+    return "";
+  }
 }
 
 // Build a stable key per game record so we can dedupe across the two calls
@@ -107,9 +131,8 @@ function countGames(resp) {
 }
 
 async function fetchUpstream() {
-  // Strategy: send a wide explicit date range to sidestep the upstream's
-  // FutureGames-flag normalization (which behaves differently from cloud IPs).
-  // Range covers ~6 months back and ~6 months forward.
+  const cookies = await warmupCookies();
+
   const today = new Date();
   const startDate = new Date(today); startDate.setMonth(startDate.getMonth() - 6);
   const endDate = new Date(today);   endDate.setMonth(endDate.getMonth() + 6);
@@ -120,9 +143,9 @@ async function fetchUpstream() {
   const overridesC = { StartDate: fmt(startDate), EndDate: fmt(endDate), FutureGames: "" };
 
   const results = await Promise.allSettled([
-    fetchOne(overridesA),
-    fetchOne(overridesB),
-    fetchOne(overridesC),
+    fetchOne(overridesA, cookies),
+    fetchOne(overridesB, cookies),
+    fetchOne(overridesC, cookies),
   ]);
   const [pastR, futureR, rangeR] = results;
   const past = pastR.status === "fulfilled" ? pastR.value : null;
@@ -130,6 +153,7 @@ async function fetchUpstream() {
   const range = rangeR.status === "fulfilled" ? rangeR.value : null;
 
   const debug = {
+    cookiesAcquired: cookies || "(none)",
     pastStatus: pastR.status,
     pastError: pastR.status === "rejected" ? String(pastR.reason) : null,
     pastGames: countGames(past),
