@@ -121,6 +121,50 @@
     color: var(--dim);
   }
   .error { color: var(--loss); }
+  .view-toggle {
+    display: flex;
+    gap: 0;
+    margin: 4px 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    width: fit-content;
+  }
+  .view-toggle button {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--dim);
+    padding: 6px 14px;
+  }
+  .view-toggle button.active {
+    background: var(--accent);
+    color: #0f172a;
+    font-weight: 600;
+  }
+  table.standings {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+  }
+  table.standings th, table.standings td {
+    text-align: left;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  table.standings th {
+    color: var(--dim);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--card);
+  }
+  table.standings td.num, table.standings th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.standings tr:hover td { background: rgba(56,189,248,0.05); }
+  .diff-pos { color: var(--win); }
+  .diff-neg { color: var(--loss); }
   footer {
     margin: 32px 0 8px;
     padding-top: 16px;
@@ -168,6 +212,10 @@
     <button id="refresh">Refresh</button>
   </div>
 </header>
+<div class="view-toggle" role="tablist">
+  <button id="view-results" class="active" role="tab">Results</button>
+  <button id="view-summary" role="tab">Summary</button>
+</div>
 <div class="updated" id="updated"></div>
 <div id="games"><div class="empty">Loading…</div></div>
 <footer>
@@ -179,7 +227,10 @@
 const ENDPOINT = "/api/games";
 const STORAGE_YEAR = "scoreboard:year";
 const STORAGE_POOL = "scoreboard:pool";
+const STORAGE_VIEW = "scoreboard:view";
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
+
+let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
 
 // Mock data for preview/local testing (when /api/games is unreachable).
 const MOCK = {
@@ -296,21 +347,30 @@ function dedupe(games) {
   return [...seen.values()];
 }
 
-function render() {
+function filteredGames() {
   const year = document.getElementById("year").value;
   const pool = document.getElementById("pool").value;
-  if (!year) return;
-
+  if (!year) return { year: "", pool, games: [] };
   let games = allGames.filter(g => gameGroup(g) === year);
   if (pool !== "all") {
     if (pool === "elite") {
-      games = games.filter(g => g.DivisionName === year || !/ - /.test(g.DivisionName || ""));
+      games = games.filter(g => !/ - /.test(g.DivisionName || ""));
     } else {
       games = games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
     }
   }
-  games = dedupe(games);
-  games.sort((a, b) => {
+  return { year, pool, games };
+}
+
+function render() {
+  if (currentView === "summary") return renderSummary();
+  return renderResults();
+}
+
+function renderResults() {
+  const { year, games: filtered } = filteredGames();
+  if (!year) return;
+  const games = dedupe(filtered).sort((a, b) => {
     if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
     return parseTime(a.StartTime) - parseTime(b.StartTime);
   });
@@ -330,6 +390,80 @@ function render() {
     for (const g of byDay[date]) html.push(gameCard(g, year));
   }
   out.innerHTML = html.join("");
+}
+
+function computeStandings(games) {
+  const byTeam = new Map();
+  for (const g of games) {
+    const id = g.CurrTeamID;
+    if (!id) continue;
+    if (!byTeam.has(id)) {
+      byTeam.set(id, {
+        teamId: id, name: g.CurrTeamName || "(unknown)",
+        scheduled: 0, completed: 0,
+        w: 0, l: 0, t: 0, gf: 0, ga: 0,
+      });
+    }
+    const s = byTeam.get(id);
+    s.scheduled++;
+    if (g.GameScore && /\d+-\d+/.test(g.GameScore)) {
+      s.completed++;
+      const [awayScore, homeScore] = g.GameScore.split("-").map(Number);
+      const curIsHome = (g.OpponentName3 || "").includes("vs ");
+      const curScore = curIsHome ? homeScore : awayScore;
+      const oppScore = curIsHome ? awayScore : homeScore;
+      s.gf += curScore;
+      s.ga += oppScore;
+      if (g.WinLoss === "W") s.w++;
+      else if (g.WinLoss === "L") s.l++;
+      else if (g.WinLoss === "T") s.t++;
+    }
+  }
+  for (const s of byTeam.values()) {
+    s.points = s.w * 2 + s.t;
+    s.diff = s.gf - s.ga;
+  }
+  return [...byTeam.values()].sort((a, b) =>
+    b.points - a.points
+    || b.diff - a.diff
+    || b.gf - a.gf
+    || a.name.localeCompare(b.name));
+}
+
+function renderSummary() {
+  const { year, games } = filteredGames();
+  const out = document.getElementById("games");
+  if (!year) {
+    out.innerHTML = '<div class="empty">Select a birth year to see standings.</div>';
+    return;
+  }
+  const rows = computeStandings(games);
+  if (!rows.length) {
+    out.innerHTML = '<div class="empty">No teams for this filter.</div>';
+    return;
+  }
+  const trs = rows.map(r => {
+    const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
+    const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(r.name) + '</td>' +
+        '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
+        '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
+        '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
+      '</tr>'
+    );
+  }).join("");
+  out.innerHTML =
+    '<table class="standings">' +
+      '<thead><tr>' +
+        '<th>Team</th>' +
+        '<th class="num">GP</th>' +
+        '<th class="num">W-L-T</th>' +
+        '<th class="num">Diff</th>' +
+      '</tr></thead>' +
+      '<tbody>' + trs + '</tbody>' +
+    '</table>';
 }
 
 function gameCard(g, year) {
@@ -434,6 +568,18 @@ document.addEventListener("click", (e) => {
 });
 window.addEventListener("scroll", hideTip, true);
 window.addEventListener("resize", hideTip);
+
+function setView(v) {
+  currentView = v;
+  localStorage.setItem(STORAGE_VIEW, v);
+  document.getElementById("view-results").classList.toggle("active", v === "results");
+  document.getElementById("view-summary").classList.toggle("active", v === "summary");
+  render();
+}
+document.getElementById("view-results").addEventListener("click", () => setView("results"));
+document.getElementById("view-summary").addEventListener("click", () => setView("summary"));
+// Apply persisted view on load.
+setView(currentView);
 
 document.getElementById("year").addEventListener("change", (e) => {
   localStorage.setItem(STORAGE_YEAR, e.target.value);

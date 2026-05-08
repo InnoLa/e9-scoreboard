@@ -71,12 +71,11 @@ function gameKey(g) {
   return [g.GameDate, g.StartTime, g.CurrTeamID, g.OpponentTeamID].join("|");
 }
 
-function mergeGames(past, future) {
-  // Both responses have the same shape: Games[Program][Team] = [game,...]
-  // Merge into a single tree, deduping by gameKey.
+function mergeGames(...sources) {
+  // Each source: { Games: { Program: { Team: [game,...] } } }
   const merged = {};
   const seen = new Set();
-  for (const src of [past, future]) {
+  for (const src of sources) {
     const programs = (src && src.Games) || {};
     for (const [progName, teams] of Object.entries(programs)) {
       for (const [teamName, list] of Object.entries(teams)) {
@@ -94,16 +93,45 @@ function mergeGames(past, future) {
   return merged;
 }
 
+function countGames(resp) {
+  if (!resp || !resp.Games) return 0;
+  let n = 0;
+  for (const teams of Object.values(resp.Games)) {
+    for (const list of Object.values(teams)) n += list.length;
+  }
+  return n;
+}
+
 async function fetchUpstream() {
-  const [past, future] = await Promise.all([
-    fetchOne("n").catch(() => null),
-    fetchOne("y").catch(() => null),
+  const results = await Promise.allSettled([
+    fetchOne("n"),
+    fetchOne("y"),
+    fetchOne(""),
   ]);
-  if (!past && !future) throw new Error("both upstream calls failed");
-  const Games = mergeGames(past, future);
-  // Use whichever response has the most fields as the base for top-level keys.
-  const base = future || past;
-  return { ...base, Games, result: "success" };
+  const [pastR, futureR, blankR] = results;
+  const past = pastR.status === "fulfilled" ? pastR.value : null;
+  const future = futureR.status === "fulfilled" ? futureR.value : null;
+  const blank = blankR.status === "fulfilled" ? blankR.value : null;
+
+  const debug = {
+    pastStatus: pastR.status,
+    pastError: pastR.status === "rejected" ? String(pastR.reason) : null,
+    pastGames: countGames(past),
+    pastFutureGamesEcho: past && past.input && past.input.FutureGames,
+    futureStatus: futureR.status,
+    futureError: futureR.status === "rejected" ? String(futureR.reason) : null,
+    futureGames: countGames(future),
+    futureFutureGamesEcho: future && future.input && future.input.FutureGames,
+    blankStatus: blankR.status,
+    blankError: blankR.status === "rejected" ? String(blankR.reason) : null,
+    blankGames: countGames(blank),
+    blankFutureGamesEcho: blank && blank.input && blank.input.FutureGames,
+  };
+
+  if (!past && !future && !blank) throw new Error("all upstream calls failed");
+  const Games = mergeGames(past, future, blank);
+  const base = blank || future || past;
+  return { ...base, Games, result: "success", _debug: debug };
 }
 
 export default async function handler(req, res) {
