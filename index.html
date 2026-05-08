@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>2016 Parity — Live Scoreboard</title>
+<title>Parity Scoreboard</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -18,13 +18,12 @@
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
+    margin: 0 auto;
     background: var(--bg);
     color: var(--text);
     font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding: 16px;
     max-width: 900px;
-    margin: 0 auto;
   }
   header {
     display: flex;
@@ -35,7 +34,7 @@
     margin-bottom: 16px;
   }
   h1 { font-size: 20px; margin: 0; }
-  .controls { display: flex; gap: 8px; align-items: center; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   select, button {
     background: var(--card);
     color: var(--text);
@@ -46,7 +45,7 @@
     cursor: pointer;
   }
   button:hover, select:hover { border-color: var(--accent); }
-  .updated { color: var(--dim); font-size: 12px; }
+  .updated { color: var(--dim); font-size: 12px; margin-bottom: 4px; }
   .day-header {
     margin: 20px 0 8px;
     padding-bottom: 4px;
@@ -58,10 +57,11 @@
     text-transform: uppercase;
   }
   .game {
+    position: relative;
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 10px 12px;
+    padding: 22px 12px 10px;
     margin-bottom: 8px;
     display: grid;
     grid-template-columns: 70px 1fr auto 1fr 28px;
@@ -85,15 +85,35 @@
   .score.upcoming { color: var(--dim); font-weight: 500; font-size: 13px; }
   .winner { color: var(--win); }
   .loser { color: var(--dim); }
-  .pool {
-    display: inline-block;
+  .tier-badge {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 10px;
     color: var(--dim);
-    margin-left: 6px;
     padding: 1px 6px;
     border: 1px solid var(--line);
     border-radius: 99px;
+    background: #0f172a;
   }
+  .tier-badge.red { color: #fca5a5; border-color: #7f1d1d; }
+  .tier-badge.white { color: #f8fafc; border-color: #cbd5e1; }
+  .tier-badge.blue { color: #93c5fd; border-color: #1e40af; }
+  .tier-badge.elite { color: #fde68a; border-color: #92400e; }
+  .info-btn {
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0.7;
+  }
+  .info-btn:hover { opacity: 1; }
   .meta { color: var(--dim); font-size: 12px; margin-top: 4px; grid-column: 1 / -1; }
   .livebarn {
     color: var(--accent);
@@ -108,8 +128,32 @@
     color: var(--dim);
   }
   .error { color: var(--loss); }
+  footer {
+    margin: 32px 0 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+  }
+  footer a { color: var(--accent); }
+  footer .motto { font-weight: 700; margin-top: 6px; }
+  /* Tooltip */
+  .tip {
+    position: fixed;
+    background: #0f172a;
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    max-width: 240px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
   @media (max-width: 600px) {
-    .game { grid-template-columns: 56px 1fr auto 1fr 24px; gap: 6px; padding: 8px; }
+    .game { grid-template-columns: 56px 1fr auto 1fr 24px; gap: 6px; padding: 22px 8px 8px; }
     .team img { width: 20px; height: 20px; }
     .score { font-size: 14px; padding: 2px 6px; }
     h1 { font-size: 17px; }
@@ -118,43 +162,83 @@
 </head>
 <body>
 <header>
-  <h1>2016 Parity Scoreboard</h1>
+  <h1>Parity Scoreboard</h1>
   <div class="controls">
+    <select id="year"></select>
     <select id="pool">
-      <option value="all">All 2016</option>
-      <option value="2016">Elite</option>
-      <option value="2016 - Red">Red</option>
-      <option value="2016 - White">White</option>
-      <option value="2016 - Blue">Blue</option>
+      <option value="all">All tiers</option>
+      <option value="elite">Elite</option>
+      <option value="Red">Red</option>
+      <option value="White">White</option>
+      <option value="Blue">Blue</option>
     </select>
     <button id="refresh">Refresh</button>
   </div>
 </header>
 <div class="updated" id="updated"></div>
 <div id="games"><div class="empty">Loading…</div></div>
+<footer>
+  <div>This is a hobby project. Check the <a href="https://www.elite9hockey.com/" target="_blank" rel="noopener">e9 schedule</a> for anything of consequence.</div>
+  <div class="motto">Work Hard. Have Fun. Be Kind.</div>
+</footer>
 
 <script>
 const ENDPOINT = "/api/games";
+const STORAGE_YEAR = "scoreboard:year";
+const STORAGE_POOL = "scoreboard:pool";
+const TIER_INFO = "Tier significance is unclear and could be meaningless.";
+
+// Mock data for preview/local testing (when /api/games is unreachable).
+const MOCK = {
+  result: "success",
+  lastUpdated: Date.now(),
+  Games: { "Mock Program": { "Mock Team": [
+    mockGame("2026-05-08","9:00 AM","Friday Rink","Wolves","Hawks","2016","2016 - Red","3-1","W"),
+    mockGame("2026-05-08","11:00 AM","Friday Rink","Bruins","Eagles","2016","2016","2-2","T"),
+    mockGame("2026-05-09","8:30 AM","Saturday Rink","Comets","Sharks","2016","2016 - Blue","",""),
+    mockGame("2026-05-09","2:00 PM","Saturday Rink","Tigers","Otters","2016","2016 - White","",""),
+    mockGame("2026-05-10","10:00 AM","Sunday Rink","Wolves","Comets","2016","2016 - Red","",""),
+    mockGame("2026-05-08","9:00 AM","Friday Rink","Pumas","Lions","2017","2017 - Blue","1-4","L"),
+    mockGame("2026-05-09","12:30 PM","Saturday Rink","Pumas","Bears","2017","2017","",""),
+  ]}}
+};
+function mockGame(date,time,loc,a,b,group,div,score,wl){
+  return {
+    GameDate: date, StartTime: time, LocationName: loc,
+    CurrTeamName: a, CurrTeamID: a, CurrLogo: "",
+    OpponentName3: "vs " + b, OpponentTeamID: b, OpponentLogo: "",
+    DivisionGroupName: group, DivisionName: div,
+    GameScore: score, WinLoss: wl, LiveBarn: "",
+  };
+}
 
 let allGames = [];
 
 async function load() {
   const out = document.getElementById("games");
   out.innerHTML = '<div class="empty">Loading…</div>';
+  let data, isMock = false;
   try {
-    const r = await fetch(ENDPOINT);
-    const data = await r.json();
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(ENDPOINT, { signal: ctl.signal });
+    clearTimeout(timer);
+    data = await r.json();
     if (data.error) throw new Error(data.error);
     if (data.result !== "success") throw new Error("API returned: " + data.result);
-    allGames = flatten(data.Games);
-    const stamp = data.lastUpdated
-      ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      : new Date().toLocaleTimeString();
-    document.getElementById("updated").textContent = "Data last fetched: " + stamp;
-    render();
   } catch (e) {
-    out.innerHTML = '<div class="error">Error: ' + e.message + '</div>';
+    // Preview/local fallback: use mock data so the UI is testable without the proxy.
+    data = MOCK;
+    isMock = true;
   }
+  allGames = flatten(data.Games);
+  const stamp = data.lastUpdated
+    ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : new Date().toLocaleTimeString();
+  document.getElementById("updated").textContent =
+    (isMock ? "PREVIEW (mock data) — " : "") + "Data last fetched: " + stamp;
+  populateYearOptions();
+  render();
 }
 
 function flatten(games) {
@@ -167,8 +251,24 @@ function flatten(games) {
   return out;
 }
 
+function populateYearOptions() {
+  const years = [...new Set(allGames
+    .map(g => g.DivisionGroupName)
+    .filter(y => y && /^\d{4}$/.test(y)))].sort();
+  const sel = document.getElementById("year");
+  const saved = localStorage.getItem(STORAGE_YEAR);
+  sel.innerHTML = years.map(y =>
+    '<option value="' + y + '">' + y + '</option>'
+  ).join("");
+  if (saved && years.includes(saved)) sel.value = saved;
+  else if (years.length) sel.value = years[years.length - 1];
+
+  const poolSel = document.getElementById("pool");
+  const savedPool = localStorage.getItem(STORAGE_POOL);
+  if (savedPool) poolSel.value = savedPool;
+}
+
 function dedupe(games) {
-  // Each matchup appears twice (once per team). Pick the home-team version.
   const seen = new Map();
   for (const g of games) {
     const a = g.CurrTeamID, b = g.OpponentTeamID;
@@ -184,9 +284,18 @@ function dedupe(games) {
 }
 
 function render() {
+  const year = document.getElementById("year").value;
   const pool = document.getElementById("pool").value;
-  let games = allGames.filter(g => g.DivisionGroupName === "2016");
-  if (pool !== "all") games = games.filter(g => g.DivisionName === pool);
+  if (!year) return;
+
+  let games = allGames.filter(g => g.DivisionGroupName === year);
+  if (pool !== "all") {
+    if (pool === "elite") {
+      games = games.filter(g => g.DivisionName === year);
+    } else {
+      games = games.filter(g => g.DivisionName === year + " - " + pool);
+    }
+  }
   games = dedupe(games);
   games.sort((a, b) => {
     if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
@@ -205,13 +314,12 @@ function render() {
   const html = [];
   for (const date of Object.keys(byDay).sort()) {
     html.push('<div class="day-header">' + formatDate(date) + '</div>');
-    for (const g of byDay[date]) html.push(gameCard(g));
+    for (const g of byDay[date]) html.push(gameCard(g, year));
   }
   out.innerHTML = html.join("");
 }
 
-function gameCard(g) {
-  // Determine home/away based on "vs " (home) vs "at " (away) in OpponentName3
+function gameCard(g, year) {
   const curIsHome = (g.OpponentName3 || "").includes("vs ");
   const home = curIsHome
     ? { name: g.CurrTeamName, logo: g.CurrLogo }
@@ -223,10 +331,8 @@ function gameCard(g) {
   let scoreHtml, awayCls = "", homeCls = "";
   if (g.GameScore && /\d+-\d+/.test(g.GameScore)) {
     const [s1, s2] = g.GameScore.split("-").map(Number);
-    // GameScore is "currScore-oppScore"
-    const curScore = s1, oppScore = s2;
-    const homeScore = curIsHome ? curScore : oppScore;
-    const awayScore = curIsHome ? oppScore : curScore;
+    const homeScore = curIsHome ? s1 : s2;
+    const awayScore = curIsHome ? s2 : s1;
     if (homeScore > awayScore) { homeCls = "winner"; awayCls = "loser"; }
     else if (awayScore > homeScore) { awayCls = "winner"; homeCls = "loser"; }
     scoreHtml = '<div class="score"><span class="' + awayCls + '">' + awayScore + '</span> – <span class="' + homeCls + '">' + homeScore + '</span></div>';
@@ -239,12 +345,26 @@ function gameCard(g) {
     ? '<a class="livebarn" href="' + livebarnMatch[1] + '" target="_blank" title="Watch on LiveBarn">▶</a>'
     : '<span></span>';
 
-  const poolBadge = g.DivisionName && g.DivisionName !== "2016"
-    ? '<span class="pool">' + g.DivisionName.replace("2016 - ", "") + '</span>'
-    : (g.DivisionName === "2016" ? '<span class="pool">Elite</span>' : '');
+  // Tier badge: derive tier label + color class from DivisionName
+  let tierBadge = "";
+  if (g.DivisionName) {
+    let label = "", cls = "";
+    if (g.DivisionName === year) { label = "Elite"; cls = "elite"; }
+    else {
+      const t = g.DivisionName.replace(year + " - ", "");
+      label = t;
+      cls = t.toLowerCase();
+    }
+    tierBadge =
+      '<span class="tier-badge ' + cls + '">' +
+        escapeHtml(label) +
+        ' <button class="info-btn" data-tip="' + escapeHtml(TIER_INFO) + '" aria-label="About tiers">ⓘ</button>' +
+      '</span>';
+  }
 
   return (
     '<div class="game">' +
+      tierBadge +
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
         '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
@@ -256,7 +376,7 @@ function gameCard(g) {
         '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
       '</div>' +
       livebarn +
-      '<div class="meta">' + escapeHtml(g.LocationName || "") + poolBadge + '</div>' +
+      '<div class="meta">' + escapeHtml(g.LocationName || "") + '</div>' +
     '</div>'
   );
 }
@@ -285,7 +405,36 @@ function escapeHtml(s) {
     ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 }
 
-document.getElementById("pool").addEventListener("change", render);
+// Tooltip handling for info icons
+let activeTip = null;
+function hideTip() {
+  if (activeTip) { activeTip.remove(); activeTip = null; }
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".info-btn");
+  hideTip();
+  if (!btn) return;
+  e.stopPropagation();
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  tip.textContent = btn.dataset.tip;
+  document.body.appendChild(tip);
+  const r = btn.getBoundingClientRect();
+  tip.style.top = (r.bottom + 6) + "px";
+  tip.style.left = Math.max(8, Math.min(window.innerWidth - 250, r.left - 100)) + "px";
+  activeTip = tip;
+});
+window.addEventListener("scroll", hideTip, true);
+window.addEventListener("resize", hideTip);
+
+document.getElementById("year").addEventListener("change", (e) => {
+  localStorage.setItem(STORAGE_YEAR, e.target.value);
+  render();
+});
+document.getElementById("pool").addEventListener("change", (e) => {
+  localStorage.setItem(STORAGE_POOL, e.target.value);
+  render();
+});
 document.getElementById("refresh").addEventListener("click", load);
 load();
 </script>
