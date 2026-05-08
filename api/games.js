@@ -16,7 +16,7 @@ const PAYLOAD = {
   Columns: ["GameDateF","StartTime","LocationName","LiveBarn","OpponentName3","WinLoss","GameScore"],
   GroupBy: ["ProgramName","CurrTeamName"],
   ShowDropDowns: "y",
-  FutureGames: "",
+  FutureGames: "y",
   NumOfDays: "",
   IncludeOtherLeagues: "y",
   LiveBarnURL: "http://www.elite9hockey.com/livebarn/",
