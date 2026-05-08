@@ -102,7 +102,7 @@
   .tier-badge.red { color: #fca5a5; border-color: #7f1d1d; }
   .tier-badge.white { color: #f8fafc; border-color: #cbd5e1; }
   .tier-badge.blue { color: #93c5fd; border-color: #1e40af; }
-  .tier-badge.elite { color: #fde68a; border-color: #92400e; }
+  .tier-badge.green { color: #86efac; border-color: #166534; }
   .info-btn {
     cursor: pointer;
     border: none;
@@ -204,10 +204,13 @@
     <select id="year"></select>
     <select id="pool">
       <option value="all">All tiers</option>
-      <option value="elite">Elite</option>
-      <option value="Red">Red</option>
       <option value="White">White</option>
       <option value="Blue">Blue</option>
+      <option value="Red">Red</option>
+      <option value="Green">Green</option>
+    </select>
+    <select id="team">
+      <option value="all">All teams</option>
     </select>
     <button id="refresh">Refresh</button>
   </div>
@@ -228,6 +231,7 @@ const ENDPOINT = "https://e9-proxy.lanavpetersson.workers.dev/";
 const STORAGE_YEAR = "scoreboard:year";
 const STORAGE_POOL = "scoreboard:pool";
 const STORAGE_VIEW = "scoreboard:view";
+const STORAGE_TEAM = "scoreboard:team";
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
@@ -329,7 +333,27 @@ function populateYearOptions() {
 
   const poolSel = document.getElementById("pool");
   const savedPool = localStorage.getItem(STORAGE_POOL);
-  if (savedPool) poolSel.value = savedPool;
+  if (savedPool && [...poolSel.options].some(o => o.value === savedPool)) {
+    poolSel.value = savedPool;
+  }
+  populateTeamOptions();
+}
+
+function populateTeamOptions() {
+  const year = document.getElementById("year").value;
+  const pool = document.getElementById("pool").value;
+  if (!year) return;
+  let pool_games = allGames.filter(g => gameGroup(g) === year);
+  if (pool !== "all") {
+    pool_games = pool_games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
+  }
+  const teams = [...new Set(pool_games.map(g => g.CurrTeamName).filter(Boolean))].sort();
+  const sel = document.getElementById("team");
+  const saved = localStorage.getItem(STORAGE_TEAM) || "all";
+  sel.innerHTML =
+    '<option value="all">All teams</option>' +
+    teams.map(t => '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>').join("");
+  sel.value = teams.includes(saved) ? saved : "all";
 }
 
 function dedupe(games) {
@@ -347,19 +371,19 @@ function dedupe(games) {
   return [...seen.values()];
 }
 
-function filteredGames() {
+function filteredGames(applyTeam) {
   const year = document.getElementById("year").value;
   const pool = document.getElementById("pool").value;
-  if (!year) return { year: "", pool, games: [] };
+  const team = document.getElementById("team").value;
+  if (!year) return { year: "", pool, team, games: [] };
   let games = allGames.filter(g => gameGroup(g) === year);
   if (pool !== "all") {
-    if (pool === "elite") {
-      games = games.filter(g => !/ - /.test(g.DivisionName || ""));
-    } else {
-      games = games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
-    }
+    games = games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
   }
-  return { year, pool, games };
+  if (applyTeam && team !== "all") {
+    games = games.filter(g => g.CurrTeamName === team);
+  }
+  return { year, pool, team, games };
 }
 
 function render() {
@@ -368,7 +392,7 @@ function render() {
 }
 
 function renderResults() {
-  const { year, games: filtered } = filteredGames();
+  const { year, games: filtered } = filteredGames(true);
   if (!year) return;
   const games = dedupe(filtered).sort((a, b) => {
     if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
@@ -574,6 +598,8 @@ function setView(v) {
   localStorage.setItem(STORAGE_VIEW, v);
   document.getElementById("view-results").classList.toggle("active", v === "results");
   document.getElementById("view-summary").classList.toggle("active", v === "summary");
+  // Team filter only applies to Results view.
+  document.getElementById("team").style.display = v === "results" ? "" : "none";
   render();
 }
 document.getElementById("view-results").addEventListener("click", () => setView("results"));
@@ -583,10 +609,16 @@ setView(currentView);
 
 document.getElementById("year").addEventListener("change", (e) => {
   localStorage.setItem(STORAGE_YEAR, e.target.value);
+  populateTeamOptions();
   render();
 });
 document.getElementById("pool").addEventListener("change", (e) => {
   localStorage.setItem(STORAGE_POOL, e.target.value);
+  populateTeamOptions();
+  render();
+});
+document.getElementById("team").addEventListener("change", (e) => {
+  localStorage.setItem(STORAGE_TEAM, e.target.value);
   render();
 });
 document.getElementById("refresh").addEventListener("click", load);
