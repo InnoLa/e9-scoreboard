@@ -81,6 +81,14 @@
   .team.away { justify-content: flex-end; text-align: right; }
   .team img { width: 24px; height: 24px; object-fit: contain; flex-shrink: 0; }
   .team .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name-stack { display: flex; flex-direction: column; min-width: 0; }
+  .team.away .name-stack { align-items: flex-end; }
+  .team-rec {
+    font-size: 11px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    margin-top: 1px;
+  }
   .score {
     font-weight: 700;
     font-size: 16px;
@@ -332,6 +340,25 @@ function buildTeamTiers() {
   }
 }
 
+// teamId -> "W-L-T" string (records this round, regardless of tier).
+let teamRecords = new Map();
+function buildTeamRecords() {
+  const stats = new Map();
+  for (const g of allGames) {
+    if (!g.CurrTeamID) continue;
+    if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
+    if (!stats.has(g.CurrTeamID)) stats.set(g.CurrTeamID, { w: 0, l: 0, t: 0 });
+    const s = stats.get(g.CurrTeamID);
+    if (g.WinLoss === "W") s.w++;
+    else if (g.WinLoss === "L") s.l++;
+    else if (g.WinLoss === "T") s.t++;
+  }
+  teamRecords = new Map();
+  for (const [id, s] of stats) {
+    teamRecords.set(id, s.w + "-" + s.l + "-" + s.t);
+  }
+}
+
 async function load() {
   const out = document.getElementById("games");
   out.innerHTML = '<div class="empty">Loading…</div>';
@@ -351,6 +378,7 @@ async function load() {
   }
   allGames = flatten(data.Games);
   buildTeamTiers();
+  buildTeamRecords();
   const stamp = data.lastUpdated
     ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : new Date().toLocaleTimeString();
@@ -535,6 +563,11 @@ function renderMagic() {
   }
 
   const analyzed = standings.map(s => ({ ...s, ...analyzeTeamMovement(s) }));
+  // How many teams currently sit in each tier (for the divider labels).
+  const currentCounts = { White: 0, Blue: 0, Red: 0, Green: 0 };
+  for (const t of analyzed) {
+    if (t.currentTier in currentCounts) currentCounts[t.currentTier]++;
+  }
   // Sort the list as a fluid continuum:
   //  Within each predicted tier, teams moving DOWN into it appear at the top
   //  (they came from a higher tier and are dropping just past the line),
@@ -551,12 +584,18 @@ function renderMagic() {
     || b.points - a.points
     || b.diff - a.diff);
 
+  const countsLine = TIER_ORDER
+    .filter(t => currentCounts[t] > 0)
+    .map(t => currentCounts[t] + " " + t)
+    .join(" · ");
   const banner =
     '<div class="magic-banner">' +
       '<strong>🔮 Magic Ball — beta!</strong> ' +
       'Predictions look at cross-tier games only: each win vs a higher tier nudges a team up, each loss vs a lower tier nudges them down. ' +
       'Movement is capped at one tier (White ▸ Blue ▸ Red ▸ Green). ' +
-      'Teams with no cross-tier surprises stay put. Reason shows the most decisive game.' +
+      'Teams with no cross-tier surprises stay put. Reason shows the most decisive game.<br>' +
+      '<em>Currently in this round: ' + countsLine + '. ' +
+      'Note: a few teams (often guaranteed Whites) skip parity round 1 and won\'t appear here.</em>' +
     '</div>';
 
   const dot = (tier) => tier
@@ -567,9 +606,11 @@ function renderMagic() {
   const rows = [];
   for (const t of analyzed) {
     if (t.predicted !== lastPredicted) {
+      const cnt = currentCounts[t.predicted] || 0;
       rows.push(
         '<tr class="tier-divider"><td colspan="5">' +
-          'Predicted ' + escapeHtml(t.predicted) + ' starts here' +
+          'Predicted ' + escapeHtml(t.predicted) +
+          ' &middot; ' + cnt + ' currently in tier' +
         '</td></tr>'
       );
       lastPredicted = t.predicted;
@@ -685,27 +726,46 @@ function computeStandings(games) {
     || a.name.localeCompare(b.name));
 }
 
-function sortStandings(rows) {
+// "Win-credit" — sum of opponents' points for games you won, half for ties.
+// Beating a 6-point team is worth more than beating a 0-point team.
+// Computed against the same year's full team pool (so cross-tier credits count).
+function attachH2H(rows, year) {
+  const yearGames = allGames.filter(g => gameGroup(g) === year);
+  const allRows = computeStandings(yearGames);
+  const pts = new Map();
+  for (const r of allRows) pts.set(r.teamId, r.points);
+  for (const r of rows) {
+    let credit = 0;
+    for (const g of yearGames) {
+      if (g.CurrTeamID !== r.teamId) continue;
+      if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
+      const op = pts.get(g.OpponentTeamID) || 0;
+      if (g.WinLoss === "W") credit += op;
+      else if (g.WinLoss === "T") credit += op / 2;
+    }
+    r.h2h = credit;
+  }
+}
+
+function sortStandings(rows, groupByTier) {
   const dir = summarySort.dir === "asc" ? 1 : -1;
   const k = summarySort.key;
-  if (k === "name") {
-    return rows.slice().sort((a, b) => dir * a.name.localeCompare(b.name));
-  }
-  if (k === "gp") {
-    return rows.slice().sort((a, b) =>
-      dir * (a.completed - b.completed) || a.name.localeCompare(b.name));
-  }
-  if (k === "wlt") {
-    return rows.slice().sort((a, b) =>
-      dir * (a.points - b.points)
-      || dir * (a.diff - b.diff)
-      || a.name.localeCompare(b.name));
-  }
-  if (k === "diff") {
-    return rows.slice().sort((a, b) =>
-      dir * (a.diff - b.diff) || a.name.localeCompare(b.name));
-  }
-  return rows; // "ranked" — already sorted by computeStandings
+  const tierRank = (r) => {
+    const t = teamTiers.get(r.teamId) || "";
+    const idx = TIER_ORDER.indexOf(t);
+    return idx === -1 ? 99 : idx;
+  };
+  const cmpInner = (a, b) => {
+    if (k === "name") return dir * a.name.localeCompare(b.name);
+    if (k === "gp") return dir * (a.completed - b.completed) || a.name.localeCompare(b.name);
+    if (k === "wlt") return dir * (a.points - b.points) || dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
+    if (k === "diff") return dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
+    if (k === "h2h") return dir * ((a.h2h || 0) - (b.h2h || 0)) || dir * (a.points - b.points) || a.name.localeCompare(b.name);
+    // "ranked" default
+    return b.points - a.points || b.diff - a.diff || b.gf - a.gf || a.name.localeCompare(b.name);
+  };
+  return rows.slice().sort((a, b) =>
+    (groupByTier ? (tierRank(a) - tierRank(b)) : 0) || cmpInner(a, b));
 }
 
 function setSummarySort(key) {
@@ -730,23 +790,34 @@ function renderSummary() {
     out.innerHTML = '<div class="empty">No teams for this filter.</div>';
     return;
   }
-  rows = sortStandings(rows);
-  const trs = rows.map(r => {
+  attachH2H(rows, year);
+  const pool = document.getElementById("pool").value;
+  const groupByTier = showTiers && pool === "all";
+  rows = sortStandings(rows, groupByTier);
+  let lastTier = null;
+  const trsArr = [];
+  for (const r of rows) {
+    const tier = teamTiers.get(r.teamId) || "";
+    if (groupByTier && tier !== lastTier) {
+      trsArr.push('<tr class="tier-divider"><td colspan="5">' + escapeHtml(tier || "Unranked") + '</td></tr>');
+      lastTier = tier;
+    }
     const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
     const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
-    const tier = teamTiers.get(r.teamId) || "";
     const tierDot = (showTiers && tier)
       ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin-right:6px;vertical-align:middle" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
       : '';
-    return (
+    trsArr.push(
       '<tr>' +
         '<td>' + tierDot + escapeHtml(r.name) + '</td>' +
         '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
         '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
+        '<td class="num">' + (r.h2h || 0) + '</td>' +
       '</tr>'
     );
-  }).join("");
+  }
+  const trs = trsArr.join("");
   const arrow = (key) => summarySort.key === key
     ? '<span class="sort-arrow">' + (summarySort.dir === "desc" ? "▼" : "▲") + '</span>'
     : '<span class="sort-arrow">↕</span>';
@@ -758,6 +829,7 @@ function renderSummary() {
         '<th class="num ' + cls("gp") + '" data-sort="gp">GP' + arrow("gp") + '</th>' +
         '<th class="num ' + cls("wlt") + '" data-sort="wlt">W-L-T' + arrow("wlt") + '</th>' +
         '<th class="num ' + cls("diff") + '" data-sort="diff">Diff' + arrow("diff") + '</th>' +
+        '<th class="num ' + cls("h2h") + '" data-sort="h2h" title="Win-credit: sum of opponent points for games won (half for ties). Higher = beat stronger teams.">H2H' + arrow("h2h") + '</th>' +
       '</tr></thead>' +
       '<tbody>' + trs + '</tbody>' +
     '</table>';
@@ -794,11 +866,24 @@ function gameCard(g, year) {
     ? '<span class="tier-dot ' + tier.toLowerCase() + '" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
     : '';
 
+  // For upcoming games (no score), surface each team's running record.
+  const isUpcoming = !(g.GameScore && /\d+-\d+/.test(g.GameScore));
+  const homeId = curIsHome ? g.CurrTeamID : g.OpponentTeamID;
+  const awayId = curIsHome ? g.OpponentTeamID : g.CurrTeamID;
+  const homeRecStr = isUpcoming && teamRecords.get(homeId) ? teamRecords.get(homeId) : "";
+  const awayRecStr = isUpcoming && teamRecords.get(awayId) ? teamRecords.get(awayId) : "";
+  const recHtml = (r) => r
+    ? '<span class="team-rec">' + escapeHtml(r) + '</span>'
+    : '';
+
   return (
     '<div class="game">' +
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
-        '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
+        '<div class="name-stack">' +
+          '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
+          recHtml(awayRecStr) +
+        '</div>' +
         dot(awayTier) +
         (away.logo ? '<img src="' + away.logo + '" alt="">' : '') +
       '</div>' +
@@ -806,7 +891,10 @@ function gameCard(g, year) {
       '<div class="team">' +
         (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
         dot(homeTier) +
-        '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
+        '<div class="name-stack">' +
+          '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
+          recHtml(homeRecStr) +
+        '</div>' +
       '</div>' +
       '<div class="meta">' + escapeHtml(g.LocationName || "") + '</div>' +
     '</div>'
