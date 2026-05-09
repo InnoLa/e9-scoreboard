@@ -89,6 +89,17 @@
     font-variant-numeric: tabular-nums;
     margin-top: 1px;
   }
+  .scout-notes {
+    font-size: 11px;
+    color: var(--dim);
+    font-style: italic;
+    margin-top: 2px;
+    line-height: 1.35;
+    white-space: normal;
+    overflow: visible;
+  }
+  .scout-notes .scout-w { color: var(--win); font-style: normal; font-weight: 600; }
+  .scout-notes .scout-l { color: var(--loss); font-style: normal; font-weight: 600; }
   .score {
     font-weight: 700;
     font-size: 16px;
@@ -338,6 +349,34 @@ function buildTeamTiers() {
       teamTiers.set(g.CurrTeamID, tierOf(g.DivisionName));
     }
   }
+}
+
+// For an upcoming game between myTeamId and oppTeamId, return up to `max`
+// notable past results from MY team against opponents that the OPPOSING team
+// has also played (shared opponents = the relevant scouting comparison).
+function sharedOppNotes(myTeamId, oppTeamId, max) {
+  if (!myTeamId || !oppTeamId) return [];
+  const oppPlayed = new Set();
+  for (const g of allGames) {
+    if (g.CurrTeamID === oppTeamId
+        && g.GameScore && /\d+-\d+/.test(g.GameScore)) {
+      oppPlayed.add(g.OpponentTeamID);
+    }
+  }
+  const notes = [];
+  for (const g of allGames) {
+    if (g.CurrTeamID !== myTeamId) continue;
+    if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
+    if (!oppPlayed.has(g.OpponentTeamID)) continue;
+    const oppName = stripHtml(g.OpponentName3 || "").replace(/^(vs|at)\s+/, "").trim();
+    notes.push({
+      wl: g.WinLoss,
+      oppName,
+      score: g.GameScore,
+    });
+    if (notes.length >= max) break;
+  }
+  return notes;
 }
 
 // teamId -> "W-L-T" string (records this round, regardless of tier).
@@ -866,7 +905,8 @@ function gameCard(g, year) {
     ? '<span class="tier-dot ' + tier.toLowerCase() + '" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
     : '';
 
-  // For upcoming games (no score), surface each team's running record.
+  // For upcoming games (no score), surface each team's running record AND
+  // their results against shared opponents (scouting context).
   const isUpcoming = !(g.GameScore && /\d+-\d+/.test(g.GameScore));
   const homeId = curIsHome ? g.CurrTeamID : g.OpponentTeamID;
   const awayId = curIsHome ? g.OpponentTeamID : g.CurrTeamID;
@@ -875,6 +915,18 @@ function gameCard(g, year) {
   const recHtml = (r) => r
     ? '<span class="team-rec">' + escapeHtml(r) + '</span>'
     : '';
+  const homeNotes = isUpcoming ? sharedOppNotes(homeId, awayId, 3) : [];
+  const awayNotes = isUpcoming ? sharedOppNotes(awayId, homeId, 3) : [];
+  const noteHtml = (notes) => {
+    if (!notes.length) return "";
+    const lines = notes.map(n => {
+      const verb = n.wl === "W"
+        ? '<span class="scout-w">Beat</span>'
+        : (n.wl === "L" ? '<span class="scout-l">Lost to</span>' : "Tied");
+      return verb + " " + escapeHtml(n.oppName) + " " + escapeHtml(n.score);
+    });
+    return '<span class="scout-notes">' + lines.join("<br>") + '</span>';
+  };
 
   return (
     '<div class="game">' +
@@ -883,6 +935,7 @@ function gameCard(g, year) {
         '<div class="name-stack">' +
           '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
           recHtml(awayRecStr) +
+          noteHtml(awayNotes) +
         '</div>' +
         dot(awayTier) +
         (away.logo ? '<img src="' + away.logo + '" alt="">' : '') +
@@ -894,6 +947,7 @@ function gameCard(g, year) {
         '<div class="name-stack">' +
           '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
           recHtml(homeRecStr) +
+          noteHtml(homeNotes) +
         '</div>' +
       '</div>' +
       '<div class="meta">' + escapeHtml(g.LocationName || "") + '</div>' +
