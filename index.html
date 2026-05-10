@@ -206,6 +206,41 @@
   .move-down { color: var(--loss); font-weight: 700; }
   .reason { display: block; color: var(--dim); font-size: 11px; margin-top: 3px; line-height: 1.4; }
   .reason-more { font-style: italic; opacity: 0.8; }
+  .team-link { cursor: pointer; }
+  .team-link:hover { color: var(--accent); text-decoration: underline; }
+  .back-btn {
+    margin: 0 0 12px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--accent);
+    border-radius: 6px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .back-btn:hover { border-color: var(--accent); background: rgba(30,58,95,0.06); }
+  .detail-header {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 8px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .detail-rec {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-style: normal;
+  }
+  body.detail-mode header,
+  body.detail-mode .view-toggle,
+  body.detail-mode #updated { display: none; }
   footer {
     margin: 32px 0 8px;
     padding-top: 16px;
@@ -246,7 +281,24 @@
     box-shadow: 0 4px 12px rgba(74,30,46,0.18);
   }
   @media (max-width: 600px) {
-    .game { grid-template-columns: 56px 1fr auto 1fr; gap: 6px; padding: 8px; }
+    .game {
+      grid-template-columns: 1fr auto 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 4px 6px;
+      padding: 8px;
+    }
+    .game .time {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      text-align: left;
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .game .team.away { grid-column: 1; grid-row: 2; }
+    .game .score { grid-column: 2; grid-row: 2; }
+    .game .team:not(.away) { grid-column: 3; grid-row: 2; }
+    .game .meta { grid-column: 1 / -1; grid-row: 3; }
     .team img { width: 20px; height: 20px; }
     .score { font-size: 14px; padding: 2px 6px; }
     h1 { font-size: 17px; }
@@ -294,6 +346,25 @@ const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
 let summarySort = { key: "ranked", dir: "desc" };
+let detailTeamId = null;
+let detailReturn = null;
+
+function showTeamDetail(teamId) {
+  detailReturn = { scrollY: window.scrollY };
+  detailTeamId = teamId;
+  document.body.classList.add("detail-mode");
+  render();
+  window.scrollTo(0, 0);
+}
+function backFromDetail() {
+  detailTeamId = null;
+  document.body.classList.remove("detail-mode");
+  render();
+  if (detailReturn) {
+    window.scrollTo(0, detailReturn.scrollY || 0);
+    detailReturn = null;
+  }
+}
 // Tier visibility is gated behind a URL param so the public link doesn't reveal it.
 const showTiers = new URLSearchParams(location.search).has("tiers");
 
@@ -501,9 +572,45 @@ function filteredGames({ applyTeam = false, crossTier = false } = {}) {
 }
 
 function render() {
+  if (detailTeamId) return renderTeamDetail();
   if (currentView === "summary") return renderSummary();
   if (currentView === "magic") return renderMagic();
   return renderResults();
+}
+
+function renderTeamDetail() {
+  const out = document.getElementById("games");
+  const games = allGames.filter(g => g.CurrTeamID === detailTeamId);
+  const teamName = games.length ? games[0].CurrTeamName : "Team";
+  const tier = teamTiers.get(detailTeamId) || "";
+  const tierDot = (showTiers && tier)
+    ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin:0 8px 0 0;vertical-align:middle"></span>'
+    : '';
+  const record = teamRecords.get(detailTeamId) || "";
+  const sorted = games.slice().sort((a, b) => {
+    if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
+    return parseTime(a.StartTime) - parseTime(b.StartTime);
+  });
+  const byDay = {};
+  for (const g of sorted) (byDay[g.GameDate] = byDay[g.GameDate] || []).push(g);
+  const html = [];
+  html.push('<button class="back-btn" id="back-btn">← Back</button>');
+  html.push(
+    '<div class="detail-header">' +
+      tierDot + escapeHtml(teamName) +
+      (record ? ' <span class="detail-rec">' + escapeHtml(record) + '</span>' : "") +
+    '</div>'
+  );
+  if (!sorted.length) {
+    html.push('<div class="empty">No games for this team.</div>');
+  } else {
+    for (const date of Object.keys(byDay).sort()) {
+      html.push('<div class="day-header">' + formatDate(date) + '</div>');
+      for (const g of byDay[date]) html.push(gameCard(g, ""));
+    }
+  }
+  out.innerHTML = html.join("");
+  document.getElementById("back-btn").addEventListener("click", backFromDetail);
 }
 
 const TIER_ORDER = ["White", "Blue", "Red", "Green"];
@@ -881,7 +988,7 @@ function gameCard(g, year) {
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
         '<div class="name-stack">' +
-          '<span class="name ' + awayCls + '">' + escapeHtml(away.name) + '</span>' +
+          '<span class="name team-link ' + awayCls + '" data-team-id="' + escapeHtml(awayId || "") + '">' + escapeHtml(away.name) + '</span>' +
           recHtml(awayRecStr) +
         '</div>' +
         dot(awayTier) +
@@ -892,7 +999,7 @@ function gameCard(g, year) {
         (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
         dot(homeTier) +
         '<div class="name-stack">' +
-          '<span class="name ' + homeCls + '">' + escapeHtml(home.name) + '</span>' +
+          '<span class="name team-link ' + homeCls + '" data-team-id="' + escapeHtml(homeId || "") + '">' + escapeHtml(home.name) + '</span>' +
           recHtml(homeRecStr) +
         '</div>' +
       '</div>' +
@@ -985,6 +1092,10 @@ document.getElementById("team").addEventListener("change", (e) => {
   render();
 });
 document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("games").addEventListener("click", (e) => {
+  const el = e.target.closest(".team-link");
+  if (el && el.dataset.teamId) showTeamDetail(el.dataset.teamId);
+});
 load();
 </script>
 <!-- Cloudflare Web Analytics -->
