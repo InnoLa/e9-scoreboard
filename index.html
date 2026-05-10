@@ -784,7 +784,7 @@ function renderMagic() {
 
     rows.push(
       '<tr>' +
-        '<td>' + dot(t.currentTier) + escapeHtml(t.name) + '</td>' +
+        '<td>' + dot(t.currentTier) + '<span class="team-link" data-team-id="' + escapeHtml(t.teamId || "") + '">' + escapeHtml(t.name) + '</span></td>' +
         '<td class="num">' + t.completed + '/' + t.scheduled + '</td>' +
         '<td class="num">' + t.w + '-' + t.l + '-' + t.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
@@ -891,7 +891,7 @@ function attachH2H(rows, year) {
   }
 }
 
-function sortStandings(rows, groupByTier) {
+function sortStandings(rows) {
   const dir = summarySort.dir === "asc" ? 1 : -1;
   const k = summarySort.key;
   const tierRank = (r) => {
@@ -904,12 +904,15 @@ function sortStandings(rows, groupByTier) {
     if (k === "gp") return dir * (a.completed - b.completed) || a.name.localeCompare(b.name);
     if (k === "wlt") return dir * (a.points - b.points) || dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
     if (k === "diff") return dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
-    if (k === "h2h") return dir * ((a.h2h || 0) - (b.h2h || 0)) || dir * (a.points - b.points) || a.name.localeCompare(b.name);
-    // "ranked" default
-    return b.points - a.points || b.diff - a.diff || b.gf - a.gf || a.name.localeCompare(b.name);
+    if (k === "h2h") return dir * ((a.h2h || 0) - (b.h2h || 0)) || tierRank(a) - tierRank(b) || b.diff - a.diff || a.name.localeCompare(b.name);
+    // "ranked" default: H2H first, then tier rank, then goal diff, then goals for, then name.
+    return (b.h2h || 0) - (a.h2h || 0)
+      || tierRank(a) - tierRank(b)
+      || b.diff - a.diff
+      || b.gf - a.gf
+      || a.name.localeCompare(b.name);
   };
-  return rows.slice().sort((a, b) =>
-    (groupByTier ? (tierRank(a) - tierRank(b)) : 0) || cmpInner(a, b));
+  return rows.slice().sort(cmpInner);
 }
 
 function setSummarySort(key) {
@@ -935,17 +938,10 @@ function renderSummary() {
     return;
   }
   attachH2H(rows, year);
-  const pool = document.getElementById("pool").value;
-  const groupByTier = showTiers && pool === "all";
-  rows = sortStandings(rows, groupByTier);
-  let lastTier = null;
+  rows = sortStandings(rows);
   const trsArr = [];
   for (const r of rows) {
     const tier = teamTiers.get(r.teamId) || "";
-    if (groupByTier && tier !== lastTier) {
-      trsArr.push('<tr class="tier-divider"><td colspan="5">' + escapeHtml(tier || "Unranked") + '</td></tr>');
-      lastTier = tier;
-    }
     const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
     const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
     const tierDot = (showTiers && tier)
@@ -953,7 +949,7 @@ function renderSummary() {
       : '';
     trsArr.push(
       '<tr>' +
-        '<td>' + tierDot + escapeHtml(r.name) + '</td>' +
+        '<td>' + tierDot + '<span class="team-link" data-team-id="' + escapeHtml(r.teamId || "") + '">' + escapeHtml(r.name) + '</span></td>' +
         '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
         '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
