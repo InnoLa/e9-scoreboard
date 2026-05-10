@@ -208,6 +208,7 @@
   .reason-more { font-style: italic; opacity: 0.8; }
   .team-link { cursor: pointer; }
   .team-link:hover { color: var(--accent); text-decoration: underline; }
+  .name-short { display: none; }
   .back-btn {
     margin: 0 0 12px;
     padding: 6px 12px;
@@ -305,6 +306,8 @@
     .team img { width: 20px; height: 20px; }
     .score { font-size: 14px; padding: 2px 6px; }
     h1 { font-size: 17px; }
+    .name-full { display: none; }
+    .name-short { display: inline; }
   }
 </style>
 </head>
@@ -1022,7 +1025,10 @@ function gameCard(g, year) {
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
         '<div class="name-stack">' +
-          '<span class="name team-link ' + awayCls + '" data-team-id="' + escapeHtml(awayId || "") + '" title="' + escapeHtml(away.name) + '">' + escapeHtml(shortenTeamName(away.name)) + '</span>' +
+          '<span class="name team-link ' + awayCls + '" data-team-id="' + escapeHtml(awayId || "") + '">' +
+            '<span class="name-full">' + escapeHtml(away.name) + '</span>' +
+            '<span class="name-short">' + escapeHtml(shortenTeamName(away.name)) + '</span>' +
+          '</span>' +
           recHtml(awayRecStr) +
         '</div>' +
         dot(awayTier) +
@@ -1033,7 +1039,10 @@ function gameCard(g, year) {
         (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
         dot(homeTier) +
         '<div class="name-stack">' +
-          '<span class="name team-link ' + homeCls + '" data-team-id="' + escapeHtml(homeId || "") + '" title="' + escapeHtml(home.name) + '">' + escapeHtml(shortenTeamName(home.name)) + '</span>' +
+          '<span class="name team-link ' + homeCls + '" data-team-id="' + escapeHtml(homeId || "") + '">' +
+            '<span class="name-full">' + escapeHtml(home.name) + '</span>' +
+            '<span class="name-short">' + escapeHtml(shortenTeamName(home.name)) + '</span>' +
+          '</span>' +
           recHtml(homeRecStr) +
         '</div>' +
       '</div>' +
