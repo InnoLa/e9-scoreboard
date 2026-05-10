@@ -399,6 +399,36 @@ let allGames = [];
 // Map of teamId -> tier label ("Red" | "White" | "Blue" | "Green" | "" if no tier)
 let teamTiers = new Map();
 
+// Shorten team display names. Examples:
+//   "Boston Jr. Rangers 16 - Elite"   -> "E Rangers"
+//   "EC Wizards 16 - Select 2"        -> "S2 Wizards"
+//   "Worcester Jr. Railers - Select 2"-> "S2 Railers"
+//   "Rangers 16 - E"                  -> "E Rangers"
+//   "Winter Club 16 - S 2"            -> "S2 Winter Club"
+function shortenTeamName(name) {
+  if (!name) return "";
+  let s = String(name).replace(/^(vs|at)\s+/i, "").trim();
+  const m = s.match(/^(.+?)(?:\s+U?\d+)?(?:\s+-\s+(Elite|Select|E|S)(?:\s+(\d+))?)?\s*$/);
+  if (!m) return s;
+  let mascot = (m[1] || "").trim();
+  const lvl = m[2] ? m[2].charAt(0).toUpperCase() : "";
+  const num = m[3] || "";
+  // Drop "Jr." / "Jr"
+  mascot = mascot.replace(/\bJr\.?\b/gi, "").replace(/\s+/g, " ").trim();
+  // Strip common city/state/program prefixes (peel off as many as match).
+  const prefixes = ["Boston","Worcester","New Hampshire","NH","NE","EC","RI","VT","MA","Assabet","Junior","Westchester","Walpole"];
+  let changed = true;
+  while (changed && mascot) {
+    changed = false;
+    for (const p of prefixes) {
+      const re = new RegExp("^" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s+", "i");
+      if (re.test(mascot)) { mascot = mascot.replace(re, ""); changed = true; }
+    }
+  }
+  if (!mascot) return s;
+  return (lvl ? lvl + num + " " : "") + mascot;
+}
+
 function tierOf(divisionName) {
   if (!divisionName) return "";
   const idx = divisionName.indexOf(" - ");
@@ -599,8 +629,8 @@ function renderTeamDetail() {
   const html = [];
   html.push('<button class="back-btn" id="back-btn">← Back</button>');
   html.push(
-    '<div class="detail-header">' +
-      tierDot + escapeHtml(teamName) +
+    '<div class="detail-header" title="' + escapeHtml(teamName) + '">' +
+      tierDot + escapeHtml(shortenTeamName(teamName)) +
       (record ? ' <span class="detail-rec">' + escapeHtml(record) + '</span>' : "") +
     '</div>'
   );
@@ -734,7 +764,8 @@ function renderMagic() {
       const pick = t.reasonGames[0];
       let reason = "";
       if (pick) {
-        const oppName = escapeHtml(stripHtml(pick.g.OpponentName3).replace(/^(vs|at)\s+/, ""));
+        const rawOpp = stripHtml(pick.g.OpponentName3).replace(/^(vs|at)\s+/, "");
+        const oppName = escapeHtml(shortenTeamName(rawOpp));
         const verb = pick.g.WinLoss === "W" ? "Beat" : "Lost to";
         reason = '<span class="reason">' +
           verb + " " + escapeHtml(pick.oppTier) + " team " + oppName + " " + escapeHtml(pick.g.GameScore || "") +
@@ -750,7 +781,7 @@ function renderMagic() {
 
     rows.push(
       '<tr>' +
-        '<td>' + dot(t.currentTier) + escapeHtml(t.name) + '</td>' +
+        '<td title="' + escapeHtml(t.name) + '">' + dot(t.currentTier) + escapeHtml(shortenTeamName(t.name)) + '</td>' +
         '<td class="num">' + t.completed + '/' + t.scheduled + '</td>' +
         '<td class="num">' + t.w + '-' + t.l + '-' + t.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
@@ -919,7 +950,7 @@ function renderSummary() {
       : '';
     trsArr.push(
       '<tr>' +
-        '<td>' + tierDot + escapeHtml(r.name) + '</td>' +
+        '<td title="' + escapeHtml(r.name) + '">' + tierDot + escapeHtml(shortenTeamName(r.name)) + '</td>' +
         '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
         '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
@@ -991,7 +1022,7 @@ function gameCard(g, year) {
       '<div class="time">' + g.StartTime + '</div>' +
       '<div class="team away">' +
         '<div class="name-stack">' +
-          '<span class="name team-link ' + awayCls + '" data-team-id="' + escapeHtml(awayId || "") + '">' + escapeHtml(away.name) + '</span>' +
+          '<span class="name team-link ' + awayCls + '" data-team-id="' + escapeHtml(awayId || "") + '" title="' + escapeHtml(away.name) + '">' + escapeHtml(shortenTeamName(away.name)) + '</span>' +
           recHtml(awayRecStr) +
         '</div>' +
         dot(awayTier) +
@@ -1002,7 +1033,7 @@ function gameCard(g, year) {
         (home.logo ? '<img src="' + home.logo + '" alt="">' : '') +
         dot(homeTier) +
         '<div class="name-stack">' +
-          '<span class="name team-link ' + homeCls + '" data-team-id="' + escapeHtml(homeId || "") + '">' + escapeHtml(home.name) + '</span>' +
+          '<span class="name team-link ' + homeCls + '" data-team-id="' + escapeHtml(homeId || "") + '" title="' + escapeHtml(home.name) + '">' + escapeHtml(shortenTeamName(home.name)) + '</span>' +
           recHtml(homeRecStr) +
         '</div>' +
       '</div>' +
