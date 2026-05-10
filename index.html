@@ -413,10 +413,10 @@ function shortenTeamName(name) {
   let mascot = (m[1] || "").trim();
   const lvl = m[2] ? m[2].charAt(0).toUpperCase() : "";
   const num = m[3] || "";
-  // Drop "Jr." / "Jr"
-  mascot = mascot.replace(/\bJr\.?\b/gi, "").replace(/\s+/g, " ").trim();
+  // Drop "Jr." / "Jr" (regex without trailing \b so the dot is consumed)
+  mascot = mascot.replace(/\bJr\.?/gi, "").replace(/\s+/g, " ").trim();
   // Strip common city/state/program prefixes (peel off as many as match).
-  const prefixes = ["Boston","Worcester","New Hampshire","NH","NE","EC","RI","VT","MA","Assabet","Junior","Westchester","Walpole"];
+  const prefixes = ["Boston","Worcester","New England","New Hampshire","NH","NE","EC","RI","VT","MA","Assabet","Junior","Westchester","Walpole","Middlesex","Valley"];
   let changed = true;
   while (changed && mascot) {
     changed = false;
@@ -426,7 +426,7 @@ function shortenTeamName(name) {
     }
   }
   if (!mascot) return s;
-  return (lvl ? lvl + num + " " : "") + mascot;
+  return (lvl ? lvl + num + ". " : "") + mascot;
 }
 
 function tierOf(divisionName) {
@@ -629,8 +629,8 @@ function renderTeamDetail() {
   const html = [];
   html.push('<button class="back-btn" id="back-btn">← Back</button>');
   html.push(
-    '<div class="detail-header" title="' + escapeHtml(teamName) + '">' +
-      tierDot + escapeHtml(shortenTeamName(teamName)) +
+    '<div class="detail-header">' +
+      tierDot + escapeHtml(teamName) +
       (record ? ' <span class="detail-rec">' + escapeHtml(record) + '</span>' : "") +
     '</div>'
   );
@@ -781,7 +781,7 @@ function renderMagic() {
 
     rows.push(
       '<tr>' +
-        '<td title="' + escapeHtml(t.name) + '">' + dot(t.currentTier) + escapeHtml(shortenTeamName(t.name)) + '</td>' +
+        '<td>' + dot(t.currentTier) + escapeHtml(t.name) + '</td>' +
         '<td class="num">' + t.completed + '/' + t.scheduled + '</td>' +
         '<td class="num">' + t.w + '-' + t.l + '-' + t.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
@@ -950,7 +950,7 @@ function renderSummary() {
       : '';
     trsArr.push(
       '<tr>' +
-        '<td title="' + escapeHtml(r.name) + '">' + tierDot + escapeHtml(shortenTeamName(r.name)) + '</td>' +
+        '<td>' + tierDot + escapeHtml(r.name) + '</td>' +
         '<td class="num">' + r.completed + '/' + r.scheduled + '</td>' +
         '<td class="num">' + r.w + '-' + r.l + '-' + r.t + '</td>' +
         '<td class="num ' + diffCls + '">' + diffStr + '</td>' +
