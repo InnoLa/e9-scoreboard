@@ -651,44 +651,103 @@ function renderTeamDetail() {
 
 const TIER_ORDER = ["White", "Blue", "Red", "Green"];
 
-// For a given team, examine their cross-tier results.
-// Promotion signal = wins against any higher-tier opponent.
-// Demotion signal = losses against any lower-tier opponent.
-// Movement is capped to ±1 tier (White > Blue > Red > Green).
-function analyzeTeamMovement(team) {
-  const myTier = teamTiers.get(team.teamId) || "";
-  const myRank = TIER_ORDER.indexOf(myTier);
-  if (myRank === -1) return { currentTier: "", predicted: "", reasonGames: [], score: 0 };
-
-  const wins_vs_higher = [];
-  const losses_vs_lower = [];
-
-  for (const g of allGames) {
-    if (g.CurrTeamID !== team.teamId) continue;
-    if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
-    const oppTier = teamTiers.get(g.OpponentTeamID);
-    if (!oppTier) continue;
-    const oppRank = TIER_ORDER.indexOf(oppTier);
-    if (oppRank < myRank && g.WinLoss === "W") {
-      wins_vs_higher.push({ g, oppTier, oppRank });
-    } else if (oppRank > myRank && g.WinLoss === "L") {
-      losses_vs_lower.push({ g, oppTier, oppRank });
+// Two-pass analysis. Pass 1: compute each team's within-tier record (points
+// and goal diff against same-tier opponents only) plus their cross-tier
+// results. Pass 2: rank teams inside each tier, then decide movement based on
+// BOTH body-of-work (top/bottom of own tier) AND cross-tier evidence (a single
+// upset isn't enough if the team is mid-pack in their own tier).
+function analyzeAllMovement(standings) {
+  const result = standings.map(s => {
+    const myTier = teamTiers.get(s.teamId) || "";
+    const myRank = TIER_ORDER.indexOf(myTier);
+    let wt_w = 0, wt_l = 0, wt_t = 0, wt_gf = 0, wt_ga = 0;
+    const winsVsHigher = [];
+    const lossesVsLower = [];
+    for (const g of allGames) {
+      if (g.CurrTeamID !== s.teamId) continue;
+      if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
+      const oppTier = teamTiers.get(g.OpponentTeamID);
+      if (!oppTier) continue;
+      const oppRank = TIER_ORDER.indexOf(oppTier);
+      if (oppRank === myRank) {
+        const [awayS, homeS] = g.GameScore.split("-").map(Number);
+        const curIsHome = (g.OpponentName3 || "").includes("vs ");
+        wt_gf += curIsHome ? homeS : awayS;
+        wt_ga += curIsHome ? awayS : homeS;
+        if (g.WinLoss === "W") wt_w++;
+        else if (g.WinLoss === "L") wt_l++;
+        else if (g.WinLoss === "T") wt_t++;
+      } else if (oppRank < myRank && g.WinLoss === "W") {
+        winsVsHigher.push({ g, oppTier, oppRank });
+      } else if (oppRank > myRank && g.WinLoss === "L") {
+        lossesVsLower.push({ g, oppTier, oppRank });
+      }
     }
+    return {
+      ...s,
+      currentTier: myTier,
+      currentRank: myRank,
+      wtPts: wt_w * 2 + wt_t,
+      wtDiff: wt_gf - wt_ga,
+      wtGames: wt_w + wt_l + wt_t,
+      winsVsHigher, lossesVsLower,
+    };
+  });
+
+  // Rank within each tier (by within-tier points then diff).
+  const byTier = {};
+  for (const t of result) {
+    if (t.currentRank === -1) continue;
+    (byTier[t.currentTier] = byTier[t.currentTier] || []).push(t);
+  }
+  for (const tier in byTier) {
+    const arr = byTier[tier];
+    arr.sort((a, b) => b.wtPts - a.wtPts || b.wtDiff - a.wtDiff);
+    arr.forEach((t, i) => { t.tierPos = i + 1; t.tierSize = arr.length; });
   }
 
-  const score = wins_vs_higher.length - losses_vs_lower.length;
-  let predicted = myTier;
-  let reasonGames = [];
-  if (score >= 1 && myRank > 0) {
-    predicted = TIER_ORDER[myRank - 1];
-    // Most decisive promotion = win against highest tier (smallest oppRank)
-    reasonGames = wins_vs_higher.slice().sort((a, b) => a.oppRank - b.oppRank);
-  } else if (score <= -1 && myRank < TIER_ORDER.length - 1) {
-    predicted = TIER_ORDER[myRank + 1];
-    // Most decisive demotion = loss to lowest tier (largest oppRank)
-    reasonGames = losses_vs_lower.slice().sort((a, b) => b.oppRank - a.oppRank);
+  // Decide movement. Two ways a team becomes ELIGIBLE for movement in their
+  // tier: (a) by rank — top/bottom tercile of own tier, or (b) by dominance —
+  // average goal differential per same-tier game >= +3 (or <= -3). Either way
+  // requires at least one cross-tier signal to actually predict the move.
+  // Movement is capped at ±1 tier.
+  for (const t of result) {
+    let predicted = t.currentTier;
+    let direction = "stay";
+    let reasonGames = [];
+    let eligibility = ""; // "rank" | "dominance" | ""
+    let wtPerGame = 0;
+    if (t.tierSize) {
+      wtPerGame = t.wtGames ? t.wtDiff / t.wtGames : 0;
+      const tercile = Math.max(1, Math.ceil(t.tierSize / 3));
+      const topByRank = t.tierPos <= tercile;
+      const bottomByRank = t.tierPos > t.tierSize - tercile;
+      const topByDominance = wtPerGame >= 3;
+      const bottomByDominance = wtPerGame <= -3;
+      const isTop = topByRank || topByDominance;
+      const isBottom = bottomByRank || bottomByDominance;
+      if (isTop && t.winsVsHigher.length >= 1 && t.currentRank > 0) {
+        predicted = TIER_ORDER[t.currentRank - 1];
+        direction = "up";
+        reasonGames = t.winsVsHigher.slice().sort((a, b) => a.oppRank - b.oppRank);
+        eligibility = topByRank ? "rank" : "dominance";
+      } else if (isBottom && t.lossesVsLower.length >= 1 && t.currentRank < TIER_ORDER.length - 1) {
+        predicted = TIER_ORDER[t.currentRank + 1];
+        direction = "down";
+        reasonGames = t.lossesVsLower.slice().sort((a, b) => b.oppRank - a.oppRank);
+        eligibility = bottomByRank ? "rank" : "dominance";
+      }
+    }
+    t.wtPerGame = wtPerGame;
+    t.predicted = predicted;
+    t.predictedRank = TIER_ORDER.indexOf(predicted);
+    t.direction = direction;
+    t.reasonGames = reasonGames;
+    t.eligibility = eligibility;
+    t.score = t.winsVsHigher.length - t.lossesVsLower.length;
   }
-  return { currentTier: myTier, currentRank: myRank, predicted, predictedRank: TIER_ORDER.indexOf(predicted), reasonGames, score };
+
+  return result;
 }
 
 function renderMagic() {
@@ -705,7 +764,7 @@ function renderMagic() {
     return;
   }
 
-  const analyzed = standings.map(s => ({ ...s, ...analyzeTeamMovement(s) }));
+  const analyzed = analyzeAllMovement(standings);
   // How many teams currently sit in each tier (for the divider labels).
   const currentCounts = { White: 0, Blue: 0, Red: 0, Green: 0 };
   for (const t of analyzed) {
@@ -734,9 +793,11 @@ function renderMagic() {
   const banner =
     '<div class="magic-banner">' +
       '<strong>🔮 Magic Ball — beta!</strong> ' +
-      'Predictions look at cross-tier games only: each win vs a higher tier nudges a team up, each loss vs a lower tier nudges them down. ' +
-      'Movement is capped at one tier (White ▸ Blue ▸ Red ▸ Green). ' +
-      'Teams with no cross-tier surprises stay put. Reason shows the most decisive game.<br>' +
+      'Movement requires BOTH a body-of-work signal AND cross-tier evidence. ' +
+      'Eligible for promotion: top third of own tier, OR average within-tier goal-diff ≥ +3/game (dominance), AND at least one upset win. ' +
+      'Eligible for demotion: bottom third of own tier, OR average within-tier goal-diff ≤ -3/game, AND at least one loss to a lower tier. ' +
+      'One upset alone is not enough — the team also has to be dominating their tier. ' +
+      'Movement capped at one tier (White ▸ Blue ▸ Red ▸ Green).<br>' +
       '<em>Currently in this round: ' + countsLine + '. ' +
       'Note: a few teams (often guaranteed Whites) skip parity round 1 and won\'t appear here.</em>' +
     '</div>';
@@ -759,7 +820,16 @@ function renderMagic() {
       lastPredicted = t.predicted;
     }
 
-    let predictionCell = '<span style="color:var(--dim)">—</span>';
+    // Tier-position context (e.g. "1/7 in Red"), used in every cell.
+    // Append per-game diff when meaningfully dominant (|x| >= 2 per game).
+    const fmtPerGame = (v) => (v > 0 ? "+" : "") + v.toFixed(1);
+    const dominance = (t.wtGames && Math.abs(t.wtPerGame) >= 2)
+      ? " (" + fmtPerGame(t.wtPerGame) + "/g)"
+      : "";
+    const posLine = t.tierSize
+      ? t.tierPos + "/" + t.tierSize + " in " + t.currentTier + dominance
+      : "";
+    let predictionCell;
     if (t.predicted && t.predicted !== t.currentTier) {
       const up = t.predictedRank < t.currentRank;
       const arrow = up ? "↑" : "↓";
@@ -771,12 +841,24 @@ function renderMagic() {
         const oppName = escapeHtml(shortenTeamName(rawOpp));
         const verb = pick.g.WinLoss === "W" ? "Beat" : "Lost to";
         reason = '<span class="reason">' +
+          escapeHtml(posLine) + " · " +
           verb + " " + escapeHtml(pick.oppTier) + " team " + oppName + " " + escapeHtml(pick.g.GameScore || "") +
           (t.reasonGames.length > 1 ? ' <span class="reason-more">+' + (t.reasonGames.length - 1) + ' more</span>' : "") +
         '</span>';
       }
       predictionCell =
         '<span class="' + cls + '">' + arrow + " " + dot(t.predicted) + escapeHtml(t.predicted) + '</span>' + reason;
+    } else {
+      // Staying — explain why (position in tier + any cross-tier note that wasn't enough).
+      let note = posLine;
+      const upsets = t.winsVsHigher ? t.winsVsHigher.length : 0;
+      const slips = t.lossesVsLower ? t.lossesVsLower.length : 0;
+      const extras = [];
+      if (upsets) extras.push(upsets + " upset win" + (upsets > 1 ? "s" : "") + " (not top-tercile)");
+      if (slips) extras.push(slips + " loss" + (slips > 1 ? "es" : "") + " to lower (not bottom-tercile)");
+      predictionCell =
+        '<span style="color:var(--dim)">— stays</span>' +
+        (note ? '<span class="reason">' + escapeHtml(note) + (extras.length ? " · " + escapeHtml(extras.join("; ")) : "") + '</span>' : "");
     }
 
     const diffStr = (t.diff > 0 ? "+" : "") + t.diff;
