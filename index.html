@@ -295,7 +295,10 @@
       color: var(--accent);
       font-weight: 600;
     }
-    .game .team.away { grid-column: 1; grid-row: 2; }
+    .game .team.away { grid-column: 1; grid-row: 2; justify-content: flex-start; text-align: left; min-width: 0; }
+    .game .team.away .name-stack { align-items: flex-start; }
+    .game .team { min-width: 0; }
+    .game .team .name { max-width: 100%; }
     .game .score { grid-column: 2; grid-row: 2; }
     .game .team:not(.away) { grid-column: 3; grid-row: 2; }
     .game .meta { grid-column: 1 / -1; grid-row: 3; }
