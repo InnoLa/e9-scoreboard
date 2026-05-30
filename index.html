@@ -109,6 +109,7 @@
     flex-shrink: 0;
     border: 1px solid rgba(255,255,255,0.15);
   }
+  .tier-dot.elite { background: #eab308; border-color: rgba(0,0,0,0.25); }
   .tier-dot.red { background: #ef4444; border-color: rgba(0,0,0,0.2); }
   .tier-dot.white { background: #ffffff; border-color: #6d5e4a; }
   .tier-dot.blue { background: #3b82f6; border-color: rgba(0,0,0,0.2); }
@@ -323,6 +324,10 @@
       <option value="Red">Red</option>
       <option value="Green">Green</option>
     </select>
+    <select id="parity-season" style="display:none">
+      <option value="2027">Spring 2026 (current)</option>
+      <option value="2026">Spring 2025 (last year)</option>
+    </select>
     <select id="team">
       <option value="all">All teams</option>
     </select>
@@ -348,6 +353,9 @@ const STORAGE_YEAR = "scoreboard:year";
 const STORAGE_POOL = "scoreboard:pool";
 const STORAGE_VIEW = "scoreboard:view";
 const STORAGE_TEAM = "scoreboard:team";
+const STORAGE_SEASON = "scoreboard:season";
+const DEFAULT_SEASON = "2027";
+let currentSeason = localStorage.getItem(STORAGE_SEASON) || DEFAULT_SEASON;
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
@@ -411,14 +419,20 @@ let teamTiers = new Map();
 function shortenTeamName(name) {
   if (!name) return "";
   let s = String(name).replace(/^(vs|at)\s+/i, "").trim();
-  const m = s.match(/^(.+?)(?:\s+U?\d+)?(?:\s+-\s+(Elite|Select|E|S)(?:\s+(\d+))?)?\s*$/);
+  // Capture mascot, year (2-digit birth year or U-code), level, and sub-number.
+  const m = s.match(/^(.+?)(?:\s+(U?\d+\w*))?(?:\s+-\s+(Elite|Select|E|S)(?:\s+(\d+))?)?\s*$/);
   if (!m) return s;
   let mascot = (m[1] || "").trim();
-  const lvl = m[2] ? m[2].charAt(0).toUpperCase() : "";
-  const num = m[3] || "";
-  // Drop "Jr." / "Jr" (regex without trailing \b so the dot is consumed)
+  const yearRaw = m[2] || "";
+  const lvl = m[3] ? m[3].charAt(0).toUpperCase() : "";
+  const num = m[4] || "";
+  // Use 2-digit birth-year in the abbreviation prefix; non-numeric codes like
+  // "U14H" get appended after the mascot so the info isn't lost.
+  const yr = /^\d{2}$/.test(yearRaw) ? yearRaw : "";
+  const ageCode = yr ? "" : yearRaw; // e.g. "U14H"
+  // Drop "Jr." / "Jr" (no trailing \b so the dot is consumed too)
   mascot = mascot.replace(/\bJr\.?/gi, "").replace(/\s+/g, " ").trim();
-  // Strip common city/state/program prefixes (peel off as many as match).
+  // Strip common city/state/program prefixes.
   const prefixes = ["Boston","Worcester","New England","New Hampshire","NH","NE","EC","RI","VT","MA","Assabet","Junior","Westchester","Walpole","Middlesex","Valley"];
   let changed = true;
   while (changed && mascot) {
@@ -429,13 +443,26 @@ function shortenTeamName(name) {
     }
   }
   if (!mascot) return s;
-  return (lvl ? lvl + num + ". " : "") + mascot;
+  // Build the prefix: e.g. "E16. ", "S2-16. ", "E18. ", "E. " (no year fallback)
+  let prefix = "";
+  if (lvl) {
+    let lvlPart = lvl + num;
+    if (yr) lvlPart += (num ? "-" : "") + yr;
+    prefix = lvlPart + ". ";
+  } else if (yr) {
+    prefix = yr + ". ";
+  }
+  const suffix = ageCode ? " " + ageCode : "";
+  return prefix + mascot + suffix;
 }
 
 function tierOf(divisionName) {
   if (!divisionName) return "";
   const idx = divisionName.indexOf(" - ");
-  return idx === -1 ? "" : divisionName.slice(idx + 3);
+  if (idx !== -1) return divisionName.slice(idx + 3);
+  // No tier suffix (bare year like "2016"): treat as White. These are
+  // typically the guaranteed-Whites pool that joins parity later rounds.
+  return /^\d{4}$/.test(divisionName.trim()) ? "White" : "";
 }
 
 function buildTeamTiers() {
@@ -473,7 +500,7 @@ async function load() {
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 4000);
-    const r = await fetch(ENDPOINT, { signal: ctl.signal });
+    const r = await fetch(ENDPOINT + "?season=" + encodeURIComponent(currentSeason), { signal: ctl.signal });
     clearTimeout(timer);
     data = await r.json();
     if (data.error) throw new Error(data.error);
@@ -496,6 +523,10 @@ async function load() {
   if (!showTiers) {
     document.getElementById("pool").style.display = "none";
     document.getElementById("pool").value = "all";
+    document.getElementById("parity-season").style.display = "none";
+  } else {
+    document.getElementById("parity-season").style.display = "";
+    document.getElementById("parity-season").value = currentSeason;
   }
   render();
 }
@@ -1211,6 +1242,13 @@ document.getElementById("pool").addEventListener("change", (e) => {
 document.getElementById("team").addEventListener("change", (e) => {
   localStorage.setItem(STORAGE_TEAM, e.target.value);
   render();
+});
+document.getElementById("parity-season").addEventListener("change", (e) => {
+  currentSeason = e.target.value;
+  localStorage.setItem(STORAGE_SEASON, currentSeason);
+  // Different season = different teams. Clear stale team filter.
+  localStorage.removeItem(STORAGE_TEAM);
+  load();
 });
 document.getElementById("refresh").addEventListener("click", load);
 document.getElementById("games").addEventListener("click", (e) => {
