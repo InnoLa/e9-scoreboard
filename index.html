@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Parity Ledger</title>
+<title>E9 Ledger</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -109,7 +109,7 @@
     flex-shrink: 0;
     border: 1px solid rgba(255,255,255,0.15);
   }
-  .tier-dot.elite { background: #eab308; border-color: rgba(0,0,0,0.25); }
+  .tier-dot.elite { background: #7DC9F7; border-color: rgba(0,0,0,0.2); }
   .tier-dot.red { background: #ef4444; border-color: rgba(0,0,0,0.2); }
   .tier-dot.white { background: #ffffff; border-color: #6d5e4a; }
   .tier-dot.blue { background: #3b82f6; border-color: rgba(0,0,0,0.2); }
@@ -269,6 +269,86 @@
     transition: transform 0.4s ease, opacity 0.2s;
   }
   .wax-seal:hover { transform: rotate(-6deg) scale(1.05); opacity: 1; }
+  .upcoming-section {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .upcoming-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--card);
+    border: none;
+    padding: 10px 12px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+  }
+  .upcoming-toggle:hover { background: rgba(30,58,95,0.04); }
+  .upcoming-caret { display: inline-block; width: 12px; }
+  .upcoming-count { color: var(--dim); font-weight: 500; }
+  .upcoming-body { padding: 10px 12px; border-top: 1px solid var(--line); }
+  .show-all-btn {
+    display: block;
+    margin: 8px auto 2px;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .show-all-btn:hover { border-color: var(--accent); background: rgba(30,58,95,0.06); }
+  .pci-link { color: var(--dim); text-decoration: none; opacity: 0.75; }
+  .pci-link:hover { opacity: 1; text-decoration: underline; }
+  .pci-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20,33,61,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    padding: 20px;
+  }
+  .pci-modal {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    max-width: 420px;
+    width: 100%;
+    padding: 24px 24px 20px;
+    position: relative;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+  }
+  .pci-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--dim);
+    cursor: pointer;
+    padding: 6px;
+  }
+  .pci-close:hover { color: var(--text); }
+  .pci-title {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .pci-body { font-size: 13px; line-height: 1.7; color: var(--text); }
   /* Tooltip */
   .tip {
     position: fixed;
@@ -314,19 +394,16 @@
 </head>
 <body>
 <header>
-  <h1>Parity Ledger</h1>
+  <h1>E9 Ledger</h1>
   <div class="controls">
     <select id="year"></select>
     <select id="pool">
       <option value="all">All tiers</option>
+      <option value="Elite">Elite</option>
       <option value="White">White</option>
       <option value="Blue">Blue</option>
       <option value="Red">Red</option>
       <option value="Green">Green</option>
-    </select>
-    <select id="parity-season" style="display:none">
-      <option value="2027">Spring 2026 (current)</option>
-      <option value="2026">Spring 2025 (last year)</option>
     </select>
     <select id="team">
       <option value="all">All teams</option>
@@ -348,20 +425,20 @@
 </footer>
 
 <script>
-const ENDPOINT = "https://e9-proxy.lanavpetersson.workers.dev/";
+const WORKER_BASE = "https://hockey-results-ingest.lanavpetersson.workers.dev";
+const SEASON = "2027";
 const STORAGE_YEAR = "scoreboard:year";
 const STORAGE_POOL = "scoreboard:pool";
 const STORAGE_VIEW = "scoreboard:view";
 const STORAGE_TEAM = "scoreboard:team";
-const STORAGE_SEASON = "scoreboard:season";
-const DEFAULT_SEASON = "2027";
-let currentSeason = localStorage.getItem(STORAGE_SEASON) || DEFAULT_SEASON;
 const TIER_INFO = "Tier significance is unclear and could be meaningless.";
 
 let currentView = localStorage.getItem(STORAGE_VIEW) || "results";
 let summarySort = { key: "ranked", dir: "desc" };
 let detailTeamId = null;
 let detailReturn = null;
+let upcomingCollapsed = true;
+let upcomingShowAll = false;
 
 function showTeamDetail(teamId) {
   detailReturn = { scrollY: window.scrollY };
@@ -456,11 +533,16 @@ function shortenTeamName(name) {
   return prefix + mascot + suffix;
 }
 
+// Matches tier keywords whether the division uses parity's dash format
+// ("2016 - Blue") or the regular season's space format ("2016 Elite",
+// "2013 White North" — trailing North/South sub-pool is ignored).
+const TIER_KEYWORDS = ["Elite", "White", "Blue", "Red", "Green"];
 function tierOf(divisionName) {
   if (!divisionName) return "";
-  const idx = divisionName.indexOf(" - ");
-  if (idx !== -1) return divisionName.slice(idx + 3);
-  // No tier suffix (bare year like "2016"): treat as White. These are
+  for (const kw of TIER_KEYWORDS) {
+    if (new RegExp("\\b" + kw + "\\b", "i").test(divisionName)) return kw;
+  }
+  // No tier keyword at all (bare year like "2016"): treat as White. These are
   // typically the guaranteed-Whites pool that joins parity later rounds.
   return /^\d{4}$/.test(divisionName.trim()) ? "White" : "";
 }
@@ -493,41 +575,81 @@ function buildTeamRecords() {
   }
 }
 
+async function fetchWorker(path) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(WORKER_BASE + path, { signal: ctl.signal });
+    if (!r.ok) throw new Error("worker HTTP " + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Each normalized row from the worker describes one game from a neutral
+// home/visiting perspective. The rest of this app's rendering/analysis code
+// expects the original vahockey shape: one record per team's own
+// perspective (CurrTeam vs Opponent), so every game expands into two.
+function expandGame(g) {
+  const hasScore = g.status === "final" && g.home_score != null && g.visiting_score != null;
+  const gameScore = hasScore ? (g.visiting_score + "-" + g.home_score) : "";
+  const isParity = g.league_code === "bhlparity";
+  const base = {
+    GameDate: g.game_date, StartTime: g.start_time, LocationName: g.location_name,
+    GameScore: gameScore, isParity,
+  };
+  const homeWL = !hasScore ? "" : (g.winner === "Home" ? "W" : g.winner === "Visiting" ? "L" : "T");
+  const visWL  = !hasScore ? "" : (g.winner === "Visiting" ? "W" : g.winner === "Home" ? "L" : "T");
+  return [
+    {
+      ...base,
+      CurrTeamID: g.home_team_id, CurrTeamName: g.home_name || g.home_team_id, CurrLogo: g.home_logo || "",
+      OpponentTeamID: g.visiting_team_id, OpponentName3: "vs " + (g.visiting_name || g.visiting_team_id), OpponentLogo: g.visiting_logo || "",
+      DivisionGroupName: "", DivisionName: g.home_division || "",
+      WinLoss: homeWL,
+    },
+    {
+      ...base,
+      CurrTeamID: g.visiting_team_id, CurrTeamName: g.visiting_name || g.visiting_team_id, CurrLogo: g.visiting_logo || "",
+      OpponentTeamID: g.home_team_id, OpponentName3: "at " + (g.home_name || g.home_team_id), OpponentLogo: g.home_logo || "",
+      DivisionGroupName: "", DivisionName: g.visiting_division || "",
+      WinLoss: visWL,
+    },
+  ];
+}
+
 async function load() {
   const out = document.getElementById("games");
   out.innerHTML = '<div class="empty">Loading…</div>';
-  let data, isMock = false;
+  let lastFetched = null, isMock = false;
   try {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 4000);
-    const r = await fetch(ENDPOINT + "?season=" + encodeURIComponent(currentSeason), { signal: ctl.signal });
-    clearTimeout(timer);
-    data = await r.json();
-    if (data.error) throw new Error(data.error);
-    if (data.result !== "success") throw new Error("API returned: " + data.result);
+    const [regular, parity] = await Promise.all([
+      fetchWorker("/api/games?season=" + SEASON + "&league=e9bhl&limit=5000"),
+      fetchWorker("/api/games?season=" + SEASON + "&league=bhlparity&limit=5000"),
+    ]);
+    allGames = [...regular, ...parity].flatMap(expandGame);
+    // Freshness timestamp is best-effort — an older worker deploy without
+    // /api/meta (or any hiccup fetching it) shouldn't take down real data.
+    lastFetched = Date.now();
+    try {
+      const meta = await fetchWorker("/api/meta");
+      if (meta.last_ingested) lastFetched = new Date(meta.last_ingested + "Z").getTime();
+    } catch (e) { /* fall back to Date.now() above */ }
   } catch (e) {
-    // Preview/local fallback: use mock data so the UI is testable without the proxy.
-    data = MOCK;
+    // Preview/local fallback: use mock data so the UI is testable without the worker.
+    allGames = flatten(MOCK.Games);
+    lastFetched = MOCK.lastUpdated;
     isMock = true;
   }
-  allGames = flatten(data.Games);
   buildTeamTiers();
   buildTeamRecords();
-  const stamp = data.lastUpdated
-    ? new Date(data.lastUpdated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    : new Date().toLocaleTimeString();
-  document.getElementById("updated").textContent =
-    (isMock ? "PREVIEW (mock data) — " : "") + "Data last fetched: " + stamp;
+  const stamp = new Date(lastFetched).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  document.getElementById("updated").innerHTML =
+    (isMock ? "PREVIEW (mock data) — " : "") + "Data last fetched: " + stamp +
+    ' &nbsp;·&nbsp; <a href="#" id="pci-link" class="pci-link">Parent Conduct Index · Last report ' + formatElapsed(getPCIMinutes()) + ' ago →</a>';
+  document.getElementById("pci-link").addEventListener("click", (e) => { e.preventDefault(); openPCIModal(); });
   populateYearOptions();
-  // Hide tier UI on the public URL.
-  if (!showTiers) {
-    document.getElementById("pool").style.display = "none";
-    document.getElementById("pool").value = "all";
-    document.getElementById("parity-season").style.display = "none";
-  } else {
-    document.getElementById("parity-season").style.display = "";
-    document.getElementById("parity-season").value = currentSeason;
-  }
   render();
 }
 
@@ -587,7 +709,7 @@ function populateTeamOptions() {
   if (!year) return;
   let pool_games = allGames.filter(g => gameGroup(g) === year);
   if (pool !== "all") {
-    pool_games = pool_games.filter(g => (g.DivisionName || "").endsWith(" - " + pool));
+    pool_games = pool_games.filter(g => tierOf(g.DivisionName) === pool);
   }
   const teams = [...new Set(pool_games.map(g => g.CurrTeamName).filter(Boolean))].sort();
   const sel = document.getElementById("team");
@@ -650,7 +772,7 @@ function renderTeamDetail() {
   const games = allGames.filter(g => g.CurrTeamID === detailTeamId);
   const teamName = games.length ? games[0].CurrTeamName : "Team";
   const tier = teamTiers.get(detailTeamId) || "";
-  const tierDot = (showTiers && tier)
+  const tierDot = tier
     ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin:0 8px 0 0;vertical-align:middle"></span>'
     : '';
   const record = teamRecords.get(detailTeamId) || "";
@@ -680,7 +802,7 @@ function renderTeamDetail() {
   document.getElementById("back-btn").addEventListener("click", backFromDetail);
 }
 
-const TIER_ORDER = ["White", "Blue", "Red", "Green"];
+const TIER_ORDER = ["Elite", "White", "Blue", "Red", "Green"];
 
 // Two-pass analysis. Pass 1: compute each team's within-tier record (points
 // and goal diff against same-tier opponents only) plus their cross-tier
@@ -788,7 +910,11 @@ function renderMagic() {
     out.innerHTML = '<div class="empty">Select a birth year.</div>';
     return;
   }
-  const yearGames = allGames.filter(g => gameGroup(g) === year && tierOf(g.DivisionName));
+  // Magic Ball was built against parity-round data specifically (cross-tier
+  // movement only makes sense within a parity round); now that regular-season
+  // games are mixed into allGames too, keep this scoped to parity only so
+  // its behavior doesn't silently change.
+  const yearGames = allGames.filter(g => g.isParity && gameGroup(g) === year && tierOf(g.DivisionName));
   const standings = computeStandings(yearGames);
   if (!standings.length) {
     out.innerHTML = '<div class="empty">No teams for this year.</div>';
@@ -920,29 +1046,83 @@ function renderMagic() {
     '</table>';
 }
 
+function hasScore(g) {
+  return !!(g.GameScore && /\d+-\d+/.test(g.GameScore));
+}
+
+function dayGroupsHtml(games, year, dayOrder) {
+  const byDay = {};
+  for (const g of games) (byDay[g.GameDate] = byDay[g.GameDate] || []).push(g);
+  const dates = Object.keys(byDay).sort();
+  if (dayOrder === "desc") dates.reverse();
+  const html = [];
+  for (const date of dates) {
+    html.push('<div class="day-header">' + formatDate(date) + '</div>');
+    for (const g of byDay[date]) html.push(gameCard(g, year));
+  }
+  return html.join("");
+}
+
+function renderUpcomingSection(upcoming, year) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const in7 = new Date(); in7.setDate(in7.getDate() + 7);
+  const in7Str = in7.toISOString().slice(0, 10);
+  const withinWeek = upcoming.filter(g => g.GameDate >= todayStr && g.GameDate <= in7Str);
+  const shown = (upcomingShowAll ? upcoming : withinWeek)
+    .slice()
+    .sort((a, b) => a.GameDate !== b.GameDate ? a.GameDate.localeCompare(b.GameDate) : parseTime(a.StartTime) - parseTime(b.StartTime));
+
+  let body;
+  if (!upcoming.length) {
+    body = '<div class="empty">No upcoming games.</div>';
+  } else if (!shown.length) {
+    body = '<div class="empty">No games in the next 7 days.</div>';
+  } else {
+    body = dayGroupsHtml(shown, year, "asc");
+  }
+  const canToggleAll = upcoming.length > withinWeek.length || upcomingShowAll;
+  const toggleBtn = canToggleAll
+    ? '<button class="show-all-btn" id="upcoming-showall">' + (upcomingShowAll ? "Show next 7 days only" : "Show full schedule") + '</button>'
+    : '';
+
+  return (
+    '<div class="upcoming-section">' +
+      '<button class="upcoming-toggle" id="upcoming-toggle" aria-expanded="' + (!upcomingCollapsed) + '">' +
+        '<span class="upcoming-caret">' + (upcomingCollapsed ? "▸" : "▾") + '</span> Upcoming Games' +
+        ' <span class="upcoming-count">(' + shown.length + ')</span>' +
+      '</button>' +
+      '<div class="upcoming-body" style="display:' + (upcomingCollapsed ? "none" : "block") + '">' +
+        body + toggleBtn +
+      '</div>' +
+    '</div>'
+  );
+}
+
 function renderResults() {
   const { year, games: filtered } = filteredGames({ applyTeam: true, crossTier: true });
   if (!year) return;
-  const games = dedupe(filtered).sort((a, b) => {
-    if (a.GameDate !== b.GameDate) return a.GameDate.localeCompare(b.GameDate);
-    return parseTime(a.StartTime) - parseTime(b.StartTime);
-  });
+  const games = dedupe(filtered);
+  const completed = games.filter(hasScore);
+  const upcoming = games.filter(g => !hasScore(g));
 
   const out = document.getElementById("games");
-  if (!games.length) {
+  if (!completed.length && !upcoming.length) {
     out.innerHTML = '<div class="empty">No games for this filter.</div>';
     return;
   }
 
-  const byDay = {};
-  for (const g of games) (byDay[g.GameDate] = byDay[g.GameDate] || []).push(g);
-
-  const html = [];
-  for (const date of Object.keys(byDay).sort()) {
-    html.push('<div class="day-header">' + formatDate(date) + '</div>');
-    for (const g of byDay[date]) html.push(gameCard(g, year));
+  const html = [renderUpcomingSection(upcoming, year)];
+  if (completed.length) {
+    html.push(dayGroupsHtml(completed, year, "desc"));
+  } else {
+    html.push('<div class="empty">No completed games for this filter.</div>');
   }
   out.innerHTML = html.join("");
+
+  const toggle = document.getElementById("upcoming-toggle");
+  if (toggle) toggle.addEventListener("click", () => { upcomingCollapsed = !upcomingCollapsed; renderResults(); });
+  const showAll = document.getElementById("upcoming-showall");
+  if (showAll) showAll.addEventListener("click", () => { upcomingShowAll = !upcomingShowAll; renderResults(); });
 }
 
 function computeStandings(games) {
@@ -987,7 +1167,7 @@ function computeStandings(games) {
 // Beating a 6-point team is worth more than beating a 0-point team.
 // Computed against the same year's full team pool (so cross-tier credits count).
 function attachH2H(rows, year) {
-  const yearGames = allGames.filter(g => gameGroup(g) === year);
+  const yearGames = allGames.filter(g => !g.isParity && gameGroup(g) === year);
   const allRows = computeStandings(yearGames);
   const pts = new Map();
   for (const r of allRows) pts.set(r.teamId, r.points);
@@ -1004,28 +1184,30 @@ function attachH2H(rows, year) {
   }
 }
 
+function tierRankOf(r) {
+  const t = teamTiers.get(r.teamId) || "";
+  const idx = TIER_ORDER.indexOf(t);
+  return idx === -1 ? 99 : idx;
+}
+
+// Standings are always grouped by tier (Elite first); the chosen column sort
+// only orders teams within each tier group.
 function sortStandings(rows) {
   const dir = summarySort.dir === "asc" ? 1 : -1;
   const k = summarySort.key;
-  const tierRank = (r) => {
-    const t = teamTiers.get(r.teamId) || "";
-    const idx = TIER_ORDER.indexOf(t);
-    return idx === -1 ? 99 : idx;
-  };
-  const cmpInner = (a, b) => {
+  const within = (a, b) => {
     if (k === "name") return dir * a.name.localeCompare(b.name);
     if (k === "gp") return dir * (a.completed - b.completed) || a.name.localeCompare(b.name);
     if (k === "wlt") return dir * (a.points - b.points) || dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
     if (k === "diff") return dir * (a.diff - b.diff) || a.name.localeCompare(b.name);
-    if (k === "h2h") return dir * ((a.h2h || 0) - (b.h2h || 0)) || tierRank(a) - tierRank(b) || b.diff - a.diff || a.name.localeCompare(b.name);
-    // "ranked" default: H2H first, then tier rank, then goal diff, then goals for, then name.
+    if (k === "h2h") return dir * ((a.h2h || 0) - (b.h2h || 0)) || b.diff - a.diff || a.name.localeCompare(b.name);
+    // "ranked" default: H2H first, then goal diff, then goals for, then name.
     return (b.h2h || 0) - (a.h2h || 0)
-      || tierRank(a) - tierRank(b)
       || b.diff - a.diff
       || b.gf - a.gf
       || a.name.localeCompare(b.name);
   };
-  return rows.slice().sort(cmpInner);
+  return rows.slice().sort((a, b) => tierRankOf(a) - tierRankOf(b) || within(a, b));
 }
 
 function setSummarySort(key) {
@@ -1039,7 +1221,8 @@ function setSummarySort(key) {
 }
 
 function renderSummary() {
-  const { year, games } = filteredGames();
+  const { year, games: filtered } = filteredGames();
+  const games = filtered.filter(g => !g.isParity);
   const out = document.getElementById("games");
   if (!year) {
     out.innerHTML = '<div class="empty">Select a birth year to see standings.</div>';
@@ -1053,11 +1236,16 @@ function renderSummary() {
   attachH2H(rows, year);
   rows = sortStandings(rows);
   const trsArr = [];
+  let lastTier = null;
   for (const r of rows) {
     const tier = teamTiers.get(r.teamId) || "";
+    if (tier !== lastTier) {
+      trsArr.push('<tr class="tier-divider"><td colspan="5">' + escapeHtml(tier || "No tier") + '</td></tr>');
+      lastTier = tier;
+    }
     const diffStr = (r.diff > 0 ? "+" : "") + r.diff;
     const diffCls = r.diff > 0 ? "diff-pos" : (r.diff < 0 ? "diff-neg" : "");
-    const tierDot = (showTiers && tier)
+    const tierDot = tier
       ? '<span class="tier-dot ' + tier.toLowerCase() + '" style="margin-right:6px;vertical-align:middle" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
       : '';
     trsArr.push(
@@ -1115,7 +1303,7 @@ function gameCard(g, year) {
   const oppTier = teamTiers.get(g.OpponentTeamID) || "";
   const homeTier = curIsHome ? curTier : oppTier;
   const awayTier = curIsHome ? oppTier : curTier;
-  const dot = (tier) => (showTiers && tier)
+  const dot = (tier) => tier
     ? '<span class="tier-dot ' + tier.toLowerCase() + '" title="' + escapeHtml(tier + ' — ' + TIER_INFO) + '"></span>'
     : '';
 
@@ -1155,7 +1343,7 @@ function gameCard(g, year) {
           recHtml(homeRecStr) +
         '</div>' +
       '</div>' +
-      '<div class="meta">' + escapeHtml(g.LocationName || "") + '</div>' +
+      '<div class="meta">' + escapeHtml(g.LocationName || "") + (g.isParity ? ' · <strong>Parity Game</strong>' : '') + '</div>' +
     '</div>'
   );
 }
@@ -1182,6 +1370,41 @@ function stripHtml(s) {
 function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, c =>
     ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+const PCI_KEY = "e9:pci-minutes";
+function getPCIMinutes() {
+  let v = sessionStorage.getItem(PCI_KEY);
+  if (!v) {
+    v = String(3 + Math.floor(Math.random() * (360 - 3 + 1)));
+    sessionStorage.setItem(PCI_KEY, v);
+  }
+  return parseInt(v, 10);
+}
+function formatElapsed(mins) {
+  if (mins < 60) return mins + "m";
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h + "h" + (m ? " " + m + "m" : "");
+}
+function openPCIModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "pci-overlay";
+  overlay.innerHTML =
+    '<div class="pci-modal">' +
+      '<button class="pci-close" aria-label="Close">×</button>' +
+      '<div class="pci-title">Parent Conduct Index</div>' +
+      '<div class="pci-body">' +
+        'Oh, you clicked.<br><br>' +
+        'Heard something juicy? Sweating something you vocalized against better judgment?<br><br>' +
+        'The Ledger appreciates a little rink drama as much as the rest of us, but we have enough.<br><br>' +
+        'Your foe today may be your friend tomorrow. It’s a small hockey world.<br><br>' +
+        'Return to the stands and conduct yourselves accordingly.' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".pci-close").addEventListener("click", close);
 }
 
 // Tooltip handling for info icons
@@ -1215,9 +1438,7 @@ function setView(v) {
   // Team filter only applies to Results view.
   document.getElementById("team").style.display = v === "results" ? "" : "none";
   // Tier filter is hidden in Magic Ball view (it considers all tiers).
-  if (showTiers) {
-    document.getElementById("pool").style.display = v === "magic" ? "none" : "";
-  }
+  document.getElementById("pool").style.display = v === "magic" ? "none" : "";
   render();
 }
 document.getElementById("view-results").addEventListener("click", () => setView("results"));
@@ -1242,13 +1463,6 @@ document.getElementById("pool").addEventListener("change", (e) => {
 document.getElementById("team").addEventListener("change", (e) => {
   localStorage.setItem(STORAGE_TEAM, e.target.value);
   render();
-});
-document.getElementById("parity-season").addEventListener("change", (e) => {
-  currentSeason = e.target.value;
-  localStorage.setItem(STORAGE_SEASON, currentSeason);
-  // Different season = different teams. Clear stale team filter.
-  localStorage.removeItem(STORAGE_TEAM);
-  load();
 });
 document.getElementById("refresh").addEventListener("click", load);
 document.getElementById("games").addEventListener("click", (e) => {
