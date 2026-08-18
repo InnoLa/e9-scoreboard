@@ -549,8 +549,17 @@ function tierOf(divisionName) {
 
 function buildTeamTiers() {
   teamTiers = new Map();
+  // Parity first, then regular season — a team's displayed tier should be
+  // whichever is current, and regular season is always more current than a
+  // past parity round. Explicit two-pass so this doesn't quietly depend on
+  // array ordering elsewhere.
   for (const g of allGames) {
-    if (g.CurrTeamID && g.DivisionName) {
+    if (g.CurrTeamID && g.DivisionName && g.isParity) {
+      teamTiers.set(g.CurrTeamID, tierOf(g.DivisionName));
+    }
+  }
+  for (const g of allGames) {
+    if (g.CurrTeamID && g.DivisionName && !g.isParity) {
       teamTiers.set(g.CurrTeamID, tierOf(g.DivisionName));
     }
   }
@@ -561,7 +570,7 @@ let teamRecords = new Map();
 function buildTeamRecords() {
   const stats = new Map();
   for (const g of allGames) {
-    if (!g.CurrTeamID) continue;
+    if (!g.CurrTeamID || g.isParity) continue;
     if (!g.GameScore || !/\d+-\d+/.test(g.GameScore)) continue;
     if (!stats.has(g.CurrTeamID)) stats.set(g.CurrTeamID, { w: 0, l: 0, t: 0 });
     const s = stats.get(g.CurrTeamID);
