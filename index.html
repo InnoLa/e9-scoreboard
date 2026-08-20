@@ -679,6 +679,7 @@ function flatten(games) {
 // Rules:
 //   - 4-digit DivisionGroupName -> use as-is (e.g. "2016")
 //   - DivisionName starts with "2019..." (or any 4-digit year) -> use that year
+//   - DivisionName starts with "Mite" -> "2019" (this league's name for U8/2019)
 //   - DivisionName starts with "U8"  -> "2019"
 //   - DivisionName starts with "U14" -> "U14"
 //   - DivisionName starts with "U<n>" -> "U<n>" (keep the U-code as the group)
@@ -687,6 +688,7 @@ function gameGroup(g) {
   const dgn = g.DivisionGroupName || "";
   if (/^\d{4}$/.test(dgn)) return dgn;
   const dn = g.DivisionName || "";
+  if (/^Mite/i.test(dn)) return "2019";
   const yearMatch = dn.match(/^(\d{4})/);
   if (yearMatch) return yearMatch[1];
   const uMatch = dn.match(/^U(\d+)/);
